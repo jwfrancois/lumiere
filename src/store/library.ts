@@ -150,6 +150,9 @@ interface LibraryState {
   setIsEnriching: (s: boolean) => void
   // Persistence + reconnect actions
   persist: () => void
+  /** Load persisted library from localStorage. Must be called client-side only,
+   * after hydration, to avoid SSR mismatches. */
+  hydrateFromStorage: () => void
   reconnectAllFolders: () => Promise<void>
   reconnectFolder: (folderId: string) => Promise<boolean>
   /** Mark all files belonging to a folder as unavailable. */
@@ -166,25 +169,18 @@ function schedulePersist() {
   }, 400)
 }
 
-/* ----------------------- initial state from disk --------------------- */
+/* ----------------------- hydration from disk ------------------------- *
+ *
+ * IMPORTANT: The store ALWAYS initializes with empty state so that SSR and
+ * the first client render produce identical HTML (no hydration mismatch).
+ * The persisted library is loaded in a useEffect via `hydrateFromStorage()`
+ * after React has hydrated the tree.
+ */
 
-function loadInitialState() {
+function applyPersistedData() {
   const persisted = loadLibrary()
-  if (!persisted) {
-    return {
-      scannedFiles: [] as ScannedFile[],
-      rawMetadata: {} as Record<string, MediaMetadata>,
-      scannedFolders: [] as ScannedFolderInfo[],
-      enrichment: {} as Record<string, EnrichedInfo>,
-      currentView: 'home' as ViewName,
-      movies: [] as MovieItem[],
-      collections: [] as CollectionItem[],
-      tvShows: [] as TvShowItem[],
-      albums: [] as AlbumItem[],
-      podcasts: [] as PodcastItem[],
-      stats: undefined as CategorizationResult['stats'] | undefined,
-    }
-  }
+  if (!persisted) return
+
   // Restore files in "unavailable" mode — UI shows posters + ratings,
   // playback is blocked until the user reconnects folders.
   const files = manifestToUnavailableFiles(persisted.fileManifest)
@@ -204,7 +200,8 @@ function loadInitialState() {
     metadata: rawMetadata[f.id] || ({} as MediaMetadata),
   }))
   const result = categorizeFiles(input)
-  return {
+
+  useLibrary.setState({
     scannedFiles: files,
     rawMetadata,
     scannedFolders: folders,
@@ -216,28 +213,29 @@ function loadInitialState() {
     albums: result.albums,
     podcasts: result.podcasts,
     stats: result.stats,
-  }
+  })
 }
-
-const initial = loadInitialState()
 
 export const useLibrary = create<LibraryState>((set, get) => ({
   isScanning: false,
   scanProgress: { scanned: 0, found: 0, currentPath: '' },
-  scannedFiles: initial.scannedFiles,
-  rawMetadata: initial.rawMetadata,
-  scannedFolders: initial.scannedFolders,
-  movies: initial.movies,
-  collections: initial.collections,
-  tvShows: initial.tvShows,
-  albums: initial.albums,
-  podcasts: initial.podcasts,
-  stats: initial.stats,
-  enrichment: initial.enrichment,
+  // IMPORTANT: All library fields initialize EMPTY so SSR and the first
+  // client render produce identical HTML. Persisted data is loaded via
+  // `hydrateFromStorage()` in a useEffect after hydration.
+  scannedFiles: [],
+  rawMetadata: {},
+  scannedFolders: [],
+  movies: [],
+  collections: [],
+  tvShows: [],
+  albums: [],
+  podcasts: [],
+  stats: undefined,
+  enrichment: {},
   enriching: new Set<string>(),
   isEnriching: false,
   isReconnecting: false,
-  currentView: initial.currentView,
+  currentView: 'home',
   detailItem: null,
   queue: [],
   currentIndex: 0,
@@ -389,6 +387,12 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   setIsEnriching: (s) => set({ isEnriching: s }),
 
   /* ----------------------- persistence + reconnect ----------------------- */
+
+  hydrateFromStorage: () => {
+    // Only run on client — loadLibrary() returns null on server.
+    // Safe to call multiple times; if there's no persisted data, it's a no-op.
+    applyPersistedData()
+  },
 
   persist: () => {
     const s = get()
@@ -543,6 +547,3 @@ export function hasDisconnectedFolders(): boolean {
   const s = useLibrary.getState()
   return s.scannedFolders.some((f) => !f.connected)
 }
-
-/** True when there's persisted data from a previous session. */
-export const hasRestoredData = initial.scannedFolders.length > 0

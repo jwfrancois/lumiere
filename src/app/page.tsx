@@ -25,12 +25,22 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const currentView = useLibrary((s) => s.currentView)
   const hasLibrary = useLibrary((s) => s.scannedFiles.length > 0)
+  const hydrateFromStorage = useLibrary((s) => s.hydrateFromStorage)
 
   // Kick off background metadata enrichment for new movies / TV shows.
   useEnrichmentOrchestrator()
 
+  // CRITICAL: Hydrate the persisted library AFTER React has mounted.
+  // The store initializes empty (matching SSR) so the first client render
+  // produces identical HTML. This useEffect runs only on the client, after
+  // hydration, safely loading from localStorage without mismatch.
+  useEffect(() => {
+    hydrateFromStorage()
+  }, [hydrateFromStorage])
+
   // Auto-open the scan modal once on first mount IF the library is empty.
   // If we have persisted data from a previous session, don't bother the user.
+  // Note: this checks AFTER hydration, so `hasLibrary` reflects restored data.
   const [autoPrompted, setAutoPrompted] = useState(false)
   useEffect(() => {
     if (!hasLibrary && !autoPrompted) {
