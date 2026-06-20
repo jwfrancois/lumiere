@@ -37,6 +37,8 @@ export function Sidebar({ onScanClick, onClose }: SidebarProps) {
   const stats = useLibrary((s) => s.stats)
   const scannedFolders = useLibrary((s) => s.scannedFolders)
   const hasLibrary = scannedFolders.length > 0
+  const disconnectedCount = scannedFolders.filter((f) => !f.connected).length
+  const totalFileCount = scannedFolders.reduce((s, f) => s + f.fileCount, 0)
 
   return (
     <aside className="h-full w-full flex flex-col bg-sidebar border-r border-sidebar-border">
@@ -83,7 +85,12 @@ export function Sidebar({ onScanClick, onClose }: SidebarProps) {
         {hasLibrary && (
           <div className="mt-1.5 px-2 text-[10px] text-muted-foreground/70 text-center">
             {scannedFolders.length} folder{scannedFolders.length === 1 ? '' : 's'} •{' '}
-            {scannedFolders.reduce((s, f) => s + f.fileCount, 0)} files
+            {totalFileCount} files
+            {disconnectedCount > 0 && (
+              <span className="ml-1 text-amber-400">
+                • {disconnectedCount} offline
+              </span>
+            )}
           </div>
         )}
       </div>

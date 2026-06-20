@@ -24,6 +24,9 @@ import {
   Music,
   Mic,
   Layers,
+  RefreshCw,
+  PlugZap,
+  WifiOff,
 } from 'lucide-react'
 import {
   scanWithFSAccess,
@@ -60,8 +63,13 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
   const scannedFolders = useLibrary((s) => s.scannedFolders)
   const stats = useLibrary((s) => s.stats)
   const reset = useLibrary((s) => s.reset)
+  const reconnectFolder = useLibrary((s) => s.reconnectFolder)
+  const reconnectAllFolders = useLibrary((s) => s.reconnectAllFolders)
+  const isReconnecting = useLibrary((s) => s.isReconnecting)
 
   const hasLibrary = scannedFolders.length > 0
+  const disconnectedFolders = scannedFolders.filter((f) => !f.connected)
+  const hasDisconnectedFolders = disconnectedFolders.length > 0
 
   // Reset state when modal opens
   useEffect(() => {
@@ -85,7 +93,7 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
         setScanning(false)
         return
       }
-      await processFiles(result.files, result.folderName)
+      await processFiles(result.files, result.folderName, undefined, result.fsaHandle)
     } catch (err) {
       console.error(err)
       setErrorMsg(err instanceof Error ? err.message : 'Scan failed')
@@ -111,7 +119,8 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
         found: result.files.length,
         currentPath: '',
       })
-      await processFiles(result.files, result.folderName)
+      // Classic input picker — no FSA handle available
+      await processFiles(result.files, result.folderName, undefined, null)
     } catch (err) {
       console.error(err)
       setErrorMsg(err instanceof Error ? err.message : 'Scan failed')
@@ -126,6 +135,8 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
   const processFiles = async (
     files: ReturnType<typeof scanFromFileList>['files'],
     folderName?: string,
+    folderId?: string,
+    fsaHandle?: FileSystemDirectoryHandle | null,
   ) => {
     if (files.length === 0) {
       setPhase('done')
@@ -157,11 +168,11 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
       // Yield to UI
       await new Promise((r) => setTimeout(r, 0))
     }
-    addFiles(files, metadata, folderName)
+    addFiles(files, metadata, folderName, folderId, fsaHandle)
     setScanning(false)
     setPhase('done')
     toast.success(
-      `Added ${files.length} media file${files.length === 1 ? '' : 's'} from ${folderName || 'folder'}`,
+      `${folderId ? 'Reconnected' : 'Added'} ${files.length} media file${files.length === 1 ? '' : 's'}${folderName ? ' from ' + folderName : ''}`,
       {
         description: hasLibrary
           ? 'Your library has been updated with the new items.'
@@ -169,6 +180,36 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
       },
     )
     setTimeout(() => onOpenChange(false), 800)
+  }
+
+  /** Reconnect a previously-scanned folder using its stored FSA handle. */
+  const handleReconnect = async (folderId: string, folderName: string) => {
+    const ok = await reconnectFolder(folderId)
+    if (ok) {
+      toast.success(`Reconnected "${folderName}"`, {
+        description: 'You can now play media from this folder again.',
+      })
+    } else {
+      toast.error(`Couldn't reconnect "${folderName}"`, {
+        description: 'The folder may have been moved or deleted. Try re-scanning it.',
+      })
+    }
+  }
+
+  /** Reconnect all disconnected folders at once. */
+  const handleReconnectAll = async () => {
+    setPhase('scanning')
+    setScanning(true)
+    try {
+      await reconnectAllFolders()
+      toast.success('Reconnected all folders')
+    } catch (err) {
+      console.error(err)
+      toast.error('Reconnect failed')
+    } finally {
+      setScanning(false)
+      setPhase('idle')
+    }
   }
 
   const handleClearAll = () => {
@@ -213,7 +254,7 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
               <div className="rounded-xl bg-muted/40 border border-border/60 p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
-                    Already in library
+                    {hasDisconnectedFolders ? 'Library — needs reconnect' : 'Already in library'}
                   </span>
                   <Button
                     variant="ghost"
@@ -224,19 +265,81 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
                     <Trash2 className="w-3 h-3" /> Clear all
                   </Button>
                 </div>
+
+                {/* Reconnect banner — shown when any folder is disconnected */}
+                {hasDisconnectedFolders && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2.5 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <WifiOff className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />
+                      <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                        After a page reload, browser security requires you to
+                        re-grant folder access before playback. Your library,
+                        posters, and ratings are all preserved — just click
+                        Reconnect.
+                      </p>
+                    </div>
+                    {isFSAccessSupported() && disconnectedFolders.some((f) => f.hasFsaHandle) && (
+                      <Button
+                        size="sm"
+                        onClick={handleReconnectAll}
+                        disabled={isReconnecting}
+                        className="w-full h-7 text-[11px] bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                      >
+                        {isReconnecting ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <PlugZap className="w-3 h-3" />
+                        )}
+                        Reconnect all ({disconnectedFolders.filter((f) => f.hasFsaHandle).length})
+                      </Button>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-1 max-h-32 overflow-y-auto scrollbar-slim">
                   {scannedFolders.map((f) => (
                     <div
                       key={f.id}
-                      className="flex items-center gap-2 text-xs py-0.5"
+                      className={cn(
+                        'flex items-center gap-2 text-xs py-1 px-1.5 rounded',
+                        f.connected
+                          ? 'bg-transparent'
+                          : 'bg-amber-500/5 border border-amber-500/20',
+                      )}
                     >
-                      <FolderOpen className="w-3.5 h-3.5 text-amber-400/80 shrink-0" />
+                      <FolderOpen
+                        className={cn(
+                          'w-3.5 h-3.5 shrink-0',
+                          f.connected ? 'text-amber-400/80' : 'text-amber-400/40',
+                        )}
+                      />
                       <span className="flex-1 truncate font-mono text-muted-foreground">
                         {f.name}
                       </span>
+                      {f.connected ? (
+                        <span className="text-[9px] text-emerald-400/80 uppercase tracking-wider shrink-0">
+                          ● live
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-amber-400/70 uppercase tracking-wider shrink-0">
+                          ○ offline
+                        </span>
+                      )}
                       <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
-                        {f.fileCount} files
+                        {f.fileCount}
                       </span>
+                      {!f.connected && f.hasFsaHandle && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleReconnect(f.id, f.name)}
+                          disabled={isReconnecting}
+                          className="h-6 px-1.5 text-[10px] text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"
+                        >
+                          <RefreshCw className={cn('w-2.5 h-2.5', isReconnecting && 'animate-spin')} />
+                          Reconnect
+                        </Button>
+                      )}
                     </div>
                   ))}
                 </div>

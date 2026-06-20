@@ -19,8 +19,11 @@ import {
   ChevronUp,
   Gauge,
   Sliders,
+  PlugZap,
+  Loader2,
 } from 'lucide-react'
 import { useLibrary } from '@/store/library'
+import type { PlayableItem } from '@/lib/categorize'
 import { HiFiBadge } from './hifi-badge'
 import { formatDuration } from '@/lib/metadata'
 import { cn } from '@/lib/utils'
@@ -436,6 +439,13 @@ export function MediaPlayer() {
   if (!isPlayerOpen || !currentItem) return null
 
   const progressPct = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0
+
+  // If the current item's underlying File object isn't available (e.g.
+  // after a page reload, before the user reconnects the folder), show a
+  // friendly prompt instead of a broken player.
+  if (currentItem.file.unavailable) {
+    return <ReconnectPrompt item={currentItem} onClose={closePlayer} />
+  }
 
   return (
     <div
@@ -888,3 +898,91 @@ export function MediaPlayer() {
     </div>
   )
 }
+
+/**
+ * Shown when the user tries to play an item whose underlying File object
+ * isn't available (e.g. after a page reload). Lets them reconnect the
+ * folder with one click if we have an FSA handle, or dismiss the player.
+ */
+function ReconnectPrompt({
+  item,
+  onClose,
+}: {
+  item: PlayableItem
+  onClose: () => void
+}) {
+  const scannedFolders = useLibrary((s) => s.scannedFolders)
+  const reconnectFolder = useLibrary((s) => s.reconnectFolder)
+  const reconnectAllFolders = useLibrary((s) => s.reconnectAllFolders)
+  const isReconnecting = useLibrary((s) => s.isReconnecting)
+  const [localLoading, setLocalLoading] = useState(false)
+
+  const folder = scannedFolders.find((f) => f.id === item.file.folderId)
+
+  const handleReconnect = async () => {
+    setLocalLoading(true)
+    try {
+      if (folder) {
+        const ok = await reconnectFolder(folder.id)
+        if (!ok) {
+          // Fallback: try reconnecting all folders
+          await reconnectAllFolders()
+        }
+      } else {
+        await reconnectAllFolders()
+      }
+    } finally {
+      setLocalLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-xl">
+      <div className="max-w-md mx-4 glass-strong rounded-2xl p-8 text-center space-y-5">
+        <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+          <PlugZap className="w-8 h-8 text-amber-400" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="text-xl font-bold">Reconnect to play</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Browser security requires you to re-grant folder access before
+            playing media after a page reload. Your library, posters, and
+            ratings are all preserved — just reconnect the folder to play.
+          </p>
+        </div>
+        {folder && (
+          <div className="rounded-lg bg-muted/40 border border-border/40 p-3 text-left">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+              Folder
+            </div>
+            <div className="text-sm font-mono">{folder.name}</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {item.title}
+            </div>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button
+            onClick={handleReconnect}
+            disabled={localLoading || isReconnecting}
+            className="flex-1 bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-black font-semibold"
+          >
+            {localLoading || isReconnecting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" /> Reconnecting…
+              </>
+            ) : (
+              <>
+                <PlugZap className="w-4 h-4" /> Reconnect folder
+              </>
+            )}
+          </Button>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+

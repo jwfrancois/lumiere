@@ -37,6 +37,15 @@ export interface ScannedFile {
   kind: MediaKind
   size: number
   url: string // object URL for playback
+  /**
+   * True when the underlying File object isn't available (e.g. after a page
+   * reload, before the user re-grants folder access). The library still
+   * shows the item with its metadata + enrichment, but playback is blocked
+   * until the folder is reconnected.
+   */
+  unavailable?: boolean
+  /** ID of the folder this file came from (used for batch reconnect). */
+  folderId?: string
 }
 
 const uid = () =>
@@ -87,6 +96,8 @@ export interface ScanResult {
   files: ScannedFile[]
   /** Display name of the root folder that was scanned. */
   folderName?: string
+  /** The FSA directory handle (when scanned via FSA). Persistable in IndexedDB. */
+  fsaHandle?: FileSystemDirectoryHandle | null
 }
 
 /** Scan using the File System Access API (preferred path). */
@@ -130,7 +141,7 @@ export async function scanWithFSAccess(
       currentPath: path,
     })
   }
-  return { files, folderName: handle.name }
+  return { files, folderName: handle.name, fsaHandle: handle }
 }
 
 /**

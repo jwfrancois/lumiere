@@ -6,6 +6,7 @@ import { Sidebar } from '@/components/sidebar'
 import { ScanModal } from '@/components/scan-modal'
 import { MediaPlayer } from '@/components/media-player'
 import { DetailDrawer } from '@/components/detail-drawer'
+import { ReconnectBanner } from '@/components/reconnect-banner'
 import {
   HomeView,
   MoviesView,
@@ -28,9 +29,8 @@ export default function Home() {
   // Kick off background metadata enrichment for new movies / TV shows.
   useEnrichmentOrchestrator()
 
-  // Auto-open the scan modal once on first mount if the library is empty.
-  // We use a ref-like guard so the modal doesn't re-open when the user
-  // explicitly closes it without scanning.
+  // Auto-open the scan modal once on first mount IF the library is empty.
+  // If we have persisted data from a previous session, don't bother the user.
   const [autoPrompted, setAutoPrompted] = useState(false)
   useEffect(() => {
     if (!hasLibrary && !autoPrompted) {
@@ -42,15 +42,29 @@ export default function Home() {
     }
   }, [hasLibrary, autoPrompted])
 
+  // Allow other components (e.g. ReconnectBanner) to open the scan modal
+  // by dispatching a 'lumiere:open-scan' custom event.
+  useEffect(() => {
+    const handler = () => setScanOpen(true)
+    window.addEventListener('lumiere:open-scan', handler)
+    return () => window.removeEventListener('lumiere:open-scan', handler)
+  }, [])
+
   // Debug helper — listen for a custom event that injects test data into the
   // store. Used by agent-browser self-verification only.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (detail?.files && detail?.metadata) {
-        useLibrary
-          .getState()
-          .addFiles(detail.files, detail.metadata, detail.folderName)
+        // Pass folderId=undefined so addFiles creates a new folder entry
+        // (passing a folderId would be interpreted as a reconnect).
+        useLibrary.getState().addFiles(
+          detail.files,
+          detail.metadata,
+          detail.folderName || 'Test Folder',
+          undefined,
+          null,
+        )
       }
     }
     window.addEventListener('lumiere:inject', handler as EventListener)
@@ -108,6 +122,7 @@ export default function Home() {
         </header>
 
         <div className="flex-1 px-6 md:px-8 py-6 md:py-8">
+          <ReconnectBanner />
           {currentView === 'home' && <HomeView onScanClick={() => setScanOpen(true)} />}
           {currentView === 'movies' && <MoviesView />}
           {currentView === 'collections' && <CollectionsView />}
