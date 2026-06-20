@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useLibrary, type ViewName } from '@/store/library'
 import { MediaCard } from './media-card'
 import { PosterArt } from './poster-art'
@@ -19,18 +19,25 @@ import {
   Music,
   Mic,
   Sparkles,
-  TrendingUp,
   ArrowRight,
   Search,
   Clock,
+  Trophy,
+  PlayCircle,
 } from 'lucide-react'
-import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { NetflixHero } from './netflix-hero'
+import { NetflixRail } from './netflix-rail'
+import { NetflixCard } from './netflix-card'
+import { Top10Rail } from './top10-rail'
+import { GenreFilter, collectGenres } from './genre-filter'
+import { SpotifyCard } from './spotify-card'
+import { SpotifyRail } from './spotify-rail'
 
 /* ----------------------------------------------------------------
- * Home view — featured carousel + continue watching + section rails
+ * Home view — keeps the original dashboard style
  * ---------------------------------------------------------------- */
 export function HomeView({ onScanClick }: { onScanClick: () => void }) {
   const movies = useLibrary((s) => s.movies)
@@ -57,9 +64,6 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
     (movies.length > 0 ? movies[0] : undefined) ||
     (tvShows.length > 0 ? tvShows[0] : undefined)
 
-  // Look up enrichment for the featured item so we can use the real poster
-  // for the hero backdrop + show IMDb rating / plot. Must be called before
-  // any early return — Hooks rule.
   const featuredEnrichmentKey = featured
     ? 'movieIds' in featured
       ? `collection:${featured.id}`
@@ -96,7 +100,7 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="w-4 h-4 text-amber-400" />
               <span className="text-xs uppercase tracking-widest text-amber-300/90 font-medium">
-                Featured {featured.category === 'movie' && 'movieIds' in featured ? 'Collection' : featured.category}
+                Featured {'movieIds' in featured ? 'Collection' : featured.category}
               </span>
               {featuredEnrichment?.imdbRating !== undefined && (
                 <span className="ml-1 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-black/60 backdrop-blur text-amber-300 border border-amber-500/30">
@@ -199,7 +203,7 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
         </section>
       )}
 
-      {/* Movie collections rail */}
+      {/* Rails */}
       {collections.length > 0 && (
         <Rail
           title="Movie Collections"
@@ -224,7 +228,6 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
         </Rail>
       )}
 
-      {/* Standalone movies rail */}
       {movies.filter((m) => !m.collectionId).length > 0 && (
         <Rail
           title="Standalone Movies"
@@ -263,7 +266,6 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
         </Rail>
       )}
 
-      {/* TV shows rail */}
       {tvShows.length > 0 && (
         <Rail
           title="TV Shows"
@@ -288,7 +290,6 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
         </Rail>
       )}
 
-      {/* Music albums rail */}
       {albums.length > 0 && (
         <Rail
           title="Music Albums"
@@ -313,7 +314,6 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
         </Rail>
       )}
 
-      {/* Podcasts rail */}
       {podcasts.length > 0 && (
         <Rail
           title="Podcasts"
@@ -367,10 +367,7 @@ function EmptyHome({ onScanClick }: { onScanClick: () => void }) {
         ].map((f) => {
           const Icon = f.icon
           return (
-            <div
-              key={f.label}
-              className="glass-panel rounded-xl p-4 text-center"
-            >
+            <div key={f.label} className="glass-panel rounded-xl p-4 text-center">
               <Icon className="w-6 h-6 text-amber-400 mx-auto mb-2" />
               <div className="text-xs text-muted-foreground">{f.label}</div>
             </div>
@@ -388,9 +385,6 @@ function EmptyHome({ onScanClick }: { onScanClick: () => void }) {
   )
 }
 
-/* ----------------------------------------------------------------
- * Generic rail component
- * ---------------------------------------------------------------- */
 function Rail({
   title,
   icon,
@@ -422,49 +416,195 @@ function Rail({
   )
 }
 
-/* ----------------------------------------------------------------
- * Movies view
- * ---------------------------------------------------------------- */
+/* =================================================================
+ * NETFLIX-STYLE VIEWS (Movies, Collections, TV)
+ * ================================================================= */
+
+interface HeroItemData {
+  id: string
+  title: string
+  year?: number
+  coverUrl?: string
+  kind: 'movie' | 'tv' | 'collection'
+}
+
+function buildHeroItems(
+  items: HeroItemData[],
+  kind: 'movie' | 'tv' | 'collection',
+  openDetail: (item: { kind: 'movie' | 'collection' | 'tv'; id: string }) => void,
+  playQueue: (items: PlayableItem[], start?: number) => void,
+  getPlayItems: (item: HeroItemData) => PlayableItem[],
+): Array<{
+  id: string
+  title: string
+  year?: number
+  coverUrl?: string
+  enrichmentKey: string
+  kind: 'movie' | 'tv' | 'collection'
+  onPlay: () => void
+  onDetails: () => void
+}> {
+  return items.slice(0, 5).map((item) => ({
+    id: item.id,
+    title: item.title,
+    year: item.year,
+    coverUrl: item.coverUrl,
+    enrichmentKey: `${kind}:${item.id}`,
+    kind,
+    onPlay: () => playQueue(getPlayItems(item)),
+    onDetails: () => openDetail({ kind, id: item.id }),
+  }))
+}
+
+/** Netflix-style Movies view */
 export function MoviesView() {
   const movies = useLibrary((s) => s.movies)
+  const enrichment = useLibrary((s) => s.enrichment)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
+  const playNext = useLibrary((s) => s.playNext)
   const [query, setQuery] = useState('')
-  const [sortBy, setSortBy] = useState<'title' | 'year'>('title')
+  const [genre, setGenre] = useState<string | null>(null)
+
+  const standalone = useMemo(
+    () => movies.filter((m) => !m.collectionId),
+    [movies],
+  )
+
+  const enrichmentKeys = useMemo(
+    () => standalone.map((m) => `movie:${m.id}`),
+    [standalone],
+  )
+  const allGenres = useMemo(
+    () => collectGenres(enrichment, enrichmentKeys),
+    [enrichment, enrichmentKeys],
+  )
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
-    let list = movies.filter((m) => !m.collectionId)
+    let list = standalone
     if (q) list = list.filter((m) => m.title.toLowerCase().includes(q))
-    list = [...list].sort((a, b) => {
-      if (sortBy === 'year') return (b.year || 0) - (a.year || 0)
+    if (genre) {
+      list = list.filter((m) => {
+        const e = enrichment[`movie:${m.id}`]
+        return e?.genre?.includes(genre)
+      })
+    }
+    // Sort by rating (highest first), then title
+    return [...list].sort((a, b) => {
+      const ra = enrichment[`movie:${a.id}`]?.imdbRating || 0
+      const rb = enrichment[`movie:${b.id}`]?.imdbRating || 0
+      if (rb !== ra) return rb - ra
       return a.title.localeCompare(b.title)
     })
-    return list
-  }, [movies, query, sortBy])
+  }, [standalone, query, genre, enrichment])
+
+  // Top 10 by rating
+  const top10 = useMemo(
+    () =>
+      [...standalone]
+        .sort((a, b) => {
+          const ra = enrichment[`movie:${a.id}`]?.imdbRating || 0
+          const rb = enrichment[`movie:${b.id}`]?.imdbRating || 0
+          return rb - ra
+        })
+        .slice(0, 10),
+    [standalone, enrichment],
+  )
+
+  // Hero items (top 5 by rating)
+  const heroItems = buildHeroItems(
+    top10.slice(0, 5),
+    'movie',
+    openDetail,
+    playQueue,
+    (m) => {
+      const movie = standalone.find((x) => x.id === m.id)
+      return movie
+        ? [
+            {
+              id: movie.id,
+              title: movie.title,
+              file: movie.file,
+              metadata: movie.metadata,
+              kind: 'video' as const,
+            },
+          ]
+        : []
+    },
+  )
+
+  if (standalone.length === 0) {
+    return (
+      <EmptyView
+        title="Movies"
+        hint="No standalone movies found — try scanning a different folder."
+      />
+    )
+  }
 
   return (
-    <LibraryView
-      title="Movies"
-      icon={<Film className="w-5 h-5 text-amber-400" />}
-      query={query}
-      setQuery={setQuery}
-      sortBy={sortBy}
-      setSortBy={setSortBy}
-      count={filtered.length}
-      emptyHint="No standalone movies found — try scanning a different folder."
-    >
-      {filtered.map((m) => (
-        <div key={m.id} className="w-40 md:w-48">
-          <MediaCard
-            kind="movie"
+    <div className="pb-12">
+      {/* Hero */}
+      <NetflixHero items={heroItems} />
+
+      {/* Search + genre filter */}
+      <div className="px-6 md:px-8 mb-6 flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search movies…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 bg-white/5 border-white/10"
+          />
+        </div>
+      </div>
+      <div className="px-6 md:px-8">
+        <GenreFilter genres={allGenres} selected={genre} onSelect={setGenre} />
+      </div>
+
+      {/* Top 10 */}
+      {top10.length > 0 && !query && !genre && (
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-3 px-6 md:px-8">
+            <Trophy className="w-5 h-5 text-[var(--accent)]" />
+            <h2 className="text-xl md:text-2xl font-bold">Top 10 Movies Today</h2>
+          </div>
+          <Top10Rail
+            items={top10.map((m) => ({
+              id: m.id,
+              title: m.title,
+              coverUrl: m.coverUrl,
+              kind: 'movie',
+              enrichmentKey: `movie:${m.id}`,
+              onClick: () => openDetail({ kind: 'movie', id: m.id }),
+              onPlay: () =>
+                playQueue([
+                  {
+                    id: m.id,
+                    title: m.title,
+                    file: m.file,
+                    metadata: m.metadata,
+                    kind: 'video',
+                  },
+                ]),
+            }))}
+          />
+        </div>
+      )}
+
+      {/* Trending / All Movies rail */}
+      <NetflixRail title={query || genre ? `Results (${filtered.length})` : 'Trending Now'} badge={!query && !genre ? 'Hot' : undefined}>
+        {filtered.map((m) => (
+          <NetflixCard
+            key={m.id}
             title={m.title}
-            coverUrl={m.coverUrl}
             year={m.year}
-            durationSec={m.metadata.durationSec}
-            genre={m.genre}
-            aspect="portrait"
+            coverUrl={m.coverUrl}
+            kind="movie"
             enrichmentKey={`movie:${m.id}`}
+            durationSec={m.metadata.durationSec}
             onClick={() => openDetail({ kind: 'movie', id: m.id })}
             onPlay={() =>
               playQueue([
@@ -477,18 +617,97 @@ export function MoviesView() {
                 },
               ])
             }
+            onQueue={() =>
+              playNext([
+                {
+                  id: m.id,
+                  title: m.title,
+                  file: m.file,
+                  metadata: m.metadata,
+                  kind: 'video',
+                },
+              ])
+            }
           />
-        </div>
-      ))}
-    </LibraryView>
+        ))}
+      </NetflixRail>
+
+      {/* New Releases (sorted by year) */}
+      {!query && !genre && (
+        <NetflixRail title="New Releases">
+          {[...standalone]
+            .sort((a, b) => (b.year || 0) - (a.year || 0))
+            .slice(0, 15)
+            .map((m) => (
+              <NetflixCard
+                key={m.id}
+                title={m.title}
+                year={m.year}
+                coverUrl={m.coverUrl}
+                kind="movie"
+                enrichmentKey={`movie:${m.id}`}
+                durationSec={m.metadata.durationSec}
+                onClick={() => openDetail({ kind: 'movie', id: m.id })}
+                onPlay={() =>
+                  playQueue([
+                    {
+                      id: m.id,
+                      title: m.title,
+                      file: m.file,
+                      metadata: m.metadata,
+                      kind: 'video',
+                    },
+                  ])
+                }
+              />
+            ))}
+        </NetflixRail>
+      )}
+
+      {/* By genre rails */}
+      {!query && !genre &&
+        allGenres.slice(0, 4).map((g) => {
+          const inGenre = standalone.filter((m) => {
+            const e = enrichment[`movie:${m.id}`]
+            return e?.genre?.includes(g)
+          })
+          if (inGenre.length === 0) return null
+          return (
+            <NetflixRail key={g} title={g}>
+              {inGenre.slice(0, 15).map((m) => (
+                <NetflixCard
+                  key={m.id}
+                  title={m.title}
+                  year={m.year}
+                  coverUrl={m.coverUrl}
+                  kind="movie"
+                  enrichmentKey={`movie:${m.id}`}
+                  durationSec={m.metadata.durationSec}
+                  onClick={() => openDetail({ kind: 'movie', id: m.id })}
+                  onPlay={() =>
+                    playQueue([
+                      {
+                        id: m.id,
+                        title: m.title,
+                        file: m.file,
+                        metadata: m.metadata,
+                        kind: 'video',
+                      },
+                    ])
+                  }
+                />
+              ))}
+            </NetflixRail>
+          )
+        })}
+    </div>
   )
 }
 
-/* ----------------------------------------------------------------
- * Collections view
- * ---------------------------------------------------------------- */
+/** Netflix-style Collections view */
 export function CollectionsView() {
   const collections = useLibrary((s) => s.collections)
+  const enrichment = useLibrary((s) => s.enrichment)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
   const moviesById = useMoviesByIdMap()
@@ -496,90 +715,231 @@ export function CollectionsView() {
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
-    if (!q) return collections
-    return collections.filter((c) => c.title.toLowerCase().includes(q))
-  }, [collections, query])
+    let list = collections
+    if (q) list = list.filter((c) => c.title.toLowerCase().includes(q))
+    return [...list].sort((a, b) => {
+      const ra = enrichment[`collection:${a.id}`]?.imdbRating || 0
+      const rb = enrichment[`collection:${b.id}`]?.imdbRating || 0
+      return rb - ra
+    })
+  }, [collections, query, enrichment])
+
+  const heroItems = buildHeroItems(
+    filtered.slice(0, 5),
+    'collection',
+    openDetail,
+    playQueue,
+    (c) => {
+      const coll = collections.find((x) => x.id === c.id)
+      return coll ? buildCollectionQueue(coll, moviesById) : []
+    },
+  )
+
+  if (collections.length === 0) {
+    return (
+      <EmptyView
+        title="Collections"
+        hint="No movie collections detected. Lumière groups movies with sequel numbers (e.g. 'Movie 2', 'Movie III') into collections automatically."
+      />
+    )
+  }
 
   return (
-    <LibraryView
-      title="Movie Collections"
-      icon={<Layers className="w-5 h-5 text-amber-400" />}
-      query={query}
-      setQuery={setQuery}
-      count={filtered.length}
-      emptyHint="No movie collections detected. Lumière groups movies with sequel numbers (e.g. 'Movie 2', 'Movie III') into collections automatically."
-    >
-      {filtered.map((c) => (
-        <div key={c.id} className="w-40 md:w-48">
-          <MediaCard
-            kind="collection"
+    <div className="pb-12">
+      <NetflixHero items={heroItems} />
+      <div className="px-6 md:px-8 mb-6">
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search collections…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 bg-white/5 border-white/10"
+          />
+        </div>
+      </div>
+      <NetflixRail title={`Collections (${filtered.length})`}>
+        {filtered.map((c) => (
+          <NetflixCard
+            key={c.id}
             title={c.title}
-            coverUrl={c.coverUrl}
             year={c.year}
-            badge={`${c.movieIds.length} films`}
-            aspect="portrait"
+            coverUrl={c.coverUrl}
+            kind="collection"
             enrichmentKey={`collection:${c.id}`}
+            badge={`${c.movieIds.length} films`}
             onClick={() => openDetail({ kind: 'collection', id: c.id })}
             onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
           />
-        </div>
-      ))}
-    </LibraryView>
+        ))}
+      </NetflixRail>
+    </div>
   )
 }
 
-/* ----------------------------------------------------------------
- * TV Shows view
- * ---------------------------------------------------------------- */
+/** Netflix-style TV Shows view */
 export function TvView() {
   const tvShows = useLibrary((s) => s.tvShows)
+  const enrichment = useLibrary((s) => s.enrichment)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
   const [query, setQuery] = useState('')
+  const [genre, setGenre] = useState<string | null>(null)
+
+  const enrichmentKeys = useMemo(
+    () => tvShows.map((s) => `tv:${s.id}`),
+    [tvShows],
+  )
+  const allGenres = useMemo(
+    () => collectGenres(enrichment, enrichmentKeys),
+    [enrichment, enrichmentKeys],
+  )
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
-    if (!q) return tvShows
-    return tvShows.filter((s) => s.title.toLowerCase().includes(q))
-  }, [tvShows, query])
+    let list = tvShows
+    if (q) list = list.filter((s) => s.title.toLowerCase().includes(q))
+    if (genre) {
+      list = list.filter((s) => {
+        const e = enrichment[`tv:${s.id}`]
+        return e?.genre?.includes(genre)
+      })
+    }
+    return [...list].sort((a, b) => {
+      const ra = enrichment[`tv:${a.id}`]?.imdbRating || 0
+      const rb = enrichment[`tv:${b.id}`]?.imdbRating || 0
+      return rb - ra
+    })
+  }, [tvShows, query, genre, enrichment])
+
+  const top10 = useMemo(
+    () =>
+      [...tvShows]
+        .sort((a, b) => {
+          const ra = enrichment[`tv:${a.id}`]?.imdbRating || 0
+          const rb = enrichment[`tv:${b.id}`]?.imdbRating || 0
+          return rb - ra
+        })
+        .slice(0, 10),
+    [tvShows, enrichment],
+  )
+
+  const heroItems = buildHeroItems(
+    top10.slice(0, 5),
+    'tv',
+    openDetail,
+    playQueue,
+    (s) => {
+      const show = tvShows.find((x) => x.id === s.id)
+      return show ? buildShowQueue(show) : []
+    },
+  )
+
+  if (tvShows.length === 0) {
+    return (
+      <EmptyView
+        title="TV Shows"
+        hint="No TV shows found. Files matching S01E05 or 1x05 patterns will be grouped here."
+      />
+    )
+  }
 
   return (
-    <LibraryView
-      title="TV Shows"
-      icon={<Tv className="w-5 h-5 text-amber-400" />}
-      query={query}
-      setQuery={setQuery}
-      count={filtered.length}
-      emptyHint="No TV shows found. Files matching S01E05 or 1x05 patterns will be grouped here."
-    >
-      {filtered.map((s) => (
-        <div key={s.id} className="w-40 md:w-48">
-          <MediaCard
-            kind="tv"
+    <div className="pb-12">
+      <NetflixHero items={heroItems} />
+      <div className="px-6 md:px-8 mb-6 flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search TV shows…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 bg-white/5 border-white/10"
+          />
+        </div>
+      </div>
+      <div className="px-6 md:px-8">
+        <GenreFilter genres={allGenres} selected={genre} onSelect={setGenre} />
+      </div>
+
+      {top10.length > 0 && !query && !genre && (
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-3 px-6 md:px-8">
+            <Trophy className="w-5 h-5 text-[var(--accent)]" />
+            <h2 className="text-xl md:text-2xl font-bold">Top 10 Shows Today</h2>
+          </div>
+          <Top10Rail
+            items={top10.map((s) => ({
+              id: s.id,
+              title: s.title,
+              coverUrl: s.coverUrl,
+              kind: 'tv',
+              enrichmentKey: `tv:${s.id}`,
+              onClick: () => openDetail({ kind: 'tv', id: s.id }),
+              onPlay: () => playQueue(buildShowQueue(s)),
+            }))}
+          />
+        </div>
+      )}
+
+      <NetflixRail title={query || genre ? `Results (${filtered.length})` : 'Popular Shows'}>
+        {filtered.map((s) => (
+          <NetflixCard
+            key={s.id}
             title={s.title}
-            coverUrl={s.coverUrl}
             year={s.year}
-            badge={`${s.totalEpisodes} eps`}
-            aspect="portrait"
+            coverUrl={s.coverUrl}
+            kind="tv"
             enrichmentKey={`tv:${s.id}`}
+            badge={`${s.totalEpisodes} eps`}
             onClick={() => openDetail({ kind: 'tv', id: s.id })}
             onPlay={() => playQueue(buildShowQueue(s))}
           />
-        </div>
-      ))}
-    </LibraryView>
+        ))}
+      </NetflixRail>
+
+      {!query &&
+        !genre &&
+        allGenres.slice(0, 4).map((g) => {
+          const inGenre = tvShows.filter((s) => {
+            const e = enrichment[`tv:${s.id}`]
+            return e?.genre?.includes(g)
+          })
+          if (inGenre.length === 0) return null
+          return (
+            <NetflixRail key={g} title={g}>
+              {inGenre.slice(0, 15).map((s) => (
+                <NetflixCard
+                  key={s.id}
+                  title={s.title}
+                  year={s.year}
+                  coverUrl={s.coverUrl}
+                  kind="tv"
+                  enrichmentKey={`tv:${s.id}`}
+                  badge={`${s.totalEpisodes} eps`}
+                  onClick={() => openDetail({ kind: 'tv', id: s.id })}
+                  onPlay={() => playQueue(buildShowQueue(s))}
+                />
+              ))}
+            </NetflixRail>
+          )
+        })}
+    </div>
   )
 }
 
-/* ----------------------------------------------------------------
- * Music view (albums)
- * ---------------------------------------------------------------- */
+/* =================================================================
+ * SPOTIFY-STYLE VIEWS (Music, Podcasts)
+ * ================================================================= */
+
+/** Spotify-style Music view */
 export function MusicView() {
   const albums = useLibrary((s) => s.albums)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
+  const queue = useLibrary((s) => s.queue)
+  const currentIndex = useLibrary((s) => s.currentIndex)
   const [query, setQuery] = useState('')
-  const [sortBy, setSortBy] = useState<'title' | 'artist' | 'year'>('artist')
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
@@ -591,56 +951,166 @@ export function MusicView() {
           a.artist.toLowerCase().includes(q),
       )
     }
-    list = [...list].sort((a, b) => {
-      if (sortBy === 'year') return (b.year || 0) - (a.year || 0)
-      if (sortBy === 'artist') return a.artist.localeCompare(b.artist)
-      return a.title.localeCompare(b.title)
-    })
-    return list
-  }, [albums, query, sortBy])
+    return [...list].sort((a, b) => a.artist.localeCompare(b.artist))
+  }, [albums, query])
+
+  // Recently played (mock — first 6 albums)
+  const recent = filtered.slice(0, 6)
+
+  // Currently playing album id
+  const currentPlayingAlbumId = queue[currentIndex]?.metadata.album
+    ? albums.find(
+        (a) =>
+          a.title === queue[currentIndex]?.metadata.album &&
+          a.artist === queue[currentIndex]?.metadata.artist,
+      )?.id
+    : undefined
+
+  if (albums.length === 0) {
+    return (
+      <EmptyView
+        title="Music"
+        hint="No music albums found. MP3/FLAC/M4A files with embedded ID3 tags will be grouped by album."
+      />
+    )
+  }
+
+  // Quick-pick tiles (Spotify-style gradient tiles for first 6 artists)
+  const artists = Array.from(
+    new Set(albums.map((a) => a.artist)),
+  ).slice(0, 6)
 
   return (
-    <LibraryView
-      title="Music"
-      icon={<Music className="w-5 h-5 text-amber-400" />}
-      query={query}
-      setQuery={setQuery}
-      sortBy={sortBy}
-      setSortBy={setSortBy}
-      sortOptions={[
-        { value: 'artist', label: 'Artist' },
-        { value: 'title', label: 'Album' },
-        { value: 'year', label: 'Year' },
-      ]}
-      count={filtered.length}
-      emptyHint="No music albums found. MP3/FLAC/M4A files with embedded ID3 tags will be grouped by album."
-    >
-      {filtered.map((a) => (
-        <div key={a.id} className="w-40 md:w-48">
-          <MediaCard
-            kind="album"
-            title={a.title}
-            subtitle={a.artist}
-            coverUrl={a.coverUrl}
-            year={a.year}
-            badge={`${a.tracks.length} tracks`}
-            aspect="square"
-            onClick={() => openDetail({ kind: 'album', id: a.id })}
-            onPlay={() => playQueue(buildAlbumQueue(a))}
+    <div className="pb-32">
+      {/* Header */}
+      <div className="mb-6 px-6 md:px-8">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[var(--accent)] to-emerald-700 flex items-center justify-center spotify-glow">
+            <Music className="w-5 h-5 text-[var(--accent-foreground)]" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Music</h1>
+            <p className="text-xs text-muted-foreground">
+              {albums.length} albums · {albums.reduce((s, a) => s + a.tracks.length, 0)} tracks
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="px-6 md:px-8 mb-6">
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search albums and artists…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 bg-white/5 border-white/10"
           />
         </div>
-      ))}
-    </LibraryView>
+      </div>
+
+      {!query && (
+        <>
+          {/* Quick pick tiles (artist shortcuts) */}
+          {artists.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 px-6 md:px-8 mb-8">
+              {artists.map((artist, i) => {
+                const artistAlbums = albums.filter((a) => a.artist === artist)
+                const firstAlbum = artistAlbums[0]
+                if (!firstAlbum) return null
+                return (
+                  <button
+                    key={artist}
+                    onClick={() => openDetail({ kind: 'album', id: firstAlbum.id })}
+                    className="flex items-center gap-3 rounded-md overflow-hidden bg-white/[0.04] hover:bg-white/[0.1] transition group"
+                  >
+                    <div className="w-14 h-14 shrink-0 overflow-hidden">
+                      <PosterArt
+                        coverUrl={firstAlbum.coverUrl}
+                        title={artist}
+                        kind="album"
+                        square
+                      />
+                    </div>
+                    <span className="text-sm font-semibold truncate pr-3">{artist}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Good evening / Quick play row */}
+          <SpotifyRail title="Good evening" subtitle="Jump back in">
+            {recent.map((a) => (
+              <div key={a.id} className="w-44 md:w-52 shrink-0">
+                <SpotifyCard
+                  title={a.title}
+                  subtitle={a.artist}
+                  coverUrl={a.coverUrl}
+                  kind="album"
+                  badge={`${a.tracks.length} tracks`}
+                  onClick={() => openDetail({ kind: 'album', id: a.id })}
+                  onPlay={() => playQueue(buildAlbumQueue(a))}
+                  isPlaying={currentPlayingAlbumId === a.id}
+                />
+              </div>
+            ))}
+          </SpotifyRail>
+
+          {/* All albums grid */}
+          <SpotifyRail title="Your Albums" subtitle={`${filtered.length} albums in your library`}>
+            {filtered.map((a) => (
+              <div key={a.id} className="w-44 md:w-52 shrink-0">
+                <SpotifyCard
+                  title={a.title}
+                  subtitle={a.artist}
+                  coverUrl={a.coverUrl}
+                  kind="album"
+                  badge={a.year ? String(a.year) : undefined}
+                  onClick={() => openDetail({ kind: 'album', id: a.id })}
+                  onPlay={() => playQueue(buildAlbumQueue(a))}
+                  isPlaying={currentPlayingAlbumId === a.id}
+                />
+              </div>
+            ))}
+          </SpotifyRail>
+        </>
+      )}
+
+      {/* Search results */}
+      {query && (
+        <div className="px-6 md:px-8">
+          <h2 className="text-lg font-bold mb-4">
+            {filtered.length} result{filtered.length === 1 ? '' : 's'} for "{query}"
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+            {filtered.map((a) => (
+              <SpotifyCard
+                key={a.id}
+                title={a.title}
+                subtitle={a.artist}
+                coverUrl={a.coverUrl}
+                kind="album"
+                onClick={() => openDetail({ kind: 'album', id: a.id })}
+                onPlay={() => playQueue(buildAlbumQueue(a))}
+                isPlaying={currentPlayingAlbumId === a.id}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
-/* ----------------------------------------------------------------
- * Podcasts view
- * ---------------------------------------------------------------- */
+/** Spotify-style Podcasts view */
 export function PodcastsView() {
   const podcasts = useLibrary((s) => s.podcasts)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
+  const queue = useLibrary((s) => s.queue)
+  const currentIndex = useLibrary((s) => s.currentIndex)
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
@@ -653,105 +1123,162 @@ export function PodcastsView() {
     )
   }, [podcasts, query])
 
+  const currentPlayingPodcastId = queue[currentIndex]?.metadata.showName
+    ? podcasts.find((p) => p.title === queue[currentIndex]?.metadata.showName)?.id
+    : undefined
+
+  // Latest episodes across all podcasts (Spotify "Latest Episodes")
+  // Computed before the early return so Hooks order is stable.
+  const latestEpisodes = useMemo(() => {
+    const eps: Array<{ podcastTitle: string; episodeTitle: string; durationSec?: number; onPlay: () => void }> = []
+    for (const p of podcasts) {
+      for (const ep of p.episodes.slice(-3).reverse()) {
+        eps.push({
+          podcastTitle: p.title,
+          episodeTitle: ep.metadata.title || `Episode ${ep.episodeNumber}`,
+          durationSec: ep.metadata.durationSec,
+          onPlay: () => {
+            const q = buildPodcastQueue(p, ep.id)
+            playQueue(q, 0)
+          },
+        })
+      }
+    }
+    return eps.slice(0, 12)
+  }, [podcasts, playQueue])
+
+  if (podcasts.length === 0) {
+    return (
+      <EmptyView
+        title="Podcasts"
+        hint="No podcasts detected. Long-form audio (25 min+) and files with 'podcast' or 'episode' in the name land here."
+      />
+    )
+  }
+
   return (
-    <LibraryView
-      title="Podcasts"
-      icon={<Mic className="w-5 h-5 text-amber-400" />}
-      query={query}
-      setQuery={setQuery}
-      count={filtered.length}
-      emptyHint="No podcasts detected. Long-form audio (25 min+) and files with 'podcast' or 'episode' in the name land here."
-    >
-      {filtered.map((p) => (
-        <div key={p.id} className="w-40 md:w-48">
-          <MediaCard
-            kind="podcast"
-            title={p.title}
-            subtitle={p.host}
-            coverUrl={p.coverUrl}
-            year={p.year}
-            badge={`${p.episodes.length} eps`}
-            aspect="square"
-            onClick={() => openDetail({ kind: 'podcast', id: p.id })}
-            onPlay={() => playQueue(buildPodcastQueue(p))}
+    <div className="pb-32">
+      {/* Header */}
+      <div className="mb-6 px-6 md:px-8">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[var(--accent)] to-emerald-700 flex items-center justify-center spotify-glow">
+            <Mic className="w-5 h-5 text-[var(--accent-foreground)]" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Podcasts</h1>
+            <p className="text-xs text-muted-foreground">
+              {podcasts.length} shows · {podcasts.reduce((s, p) => s + p.episodes.length, 0)} episodes
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="px-6 md:px-8 mb-6">
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search podcasts…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 bg-white/5 border-white/10"
           />
         </div>
-      ))}
-    </LibraryView>
+      </div>
+
+      {!query && (
+        <>
+          {/* Latest Episodes list (Spotify-style) */}
+          {latestEpisodes.length > 0 && (
+            <section className="mb-8 px-6 md:px-8">
+              <div className="flex items-end justify-between mb-3">
+                <h2 className="text-xl md:text-2xl font-bold">Latest Episodes</h2>
+                <button className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground hover:underline">
+                  Show all
+                </button>
+              </div>
+              <div className="space-y-1">
+                {latestEpisodes.map((ep, i) => (
+                  <button
+                    key={i}
+                    onClick={ep.onPlay}
+                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/[0.06] transition group text-left"
+                  >
+                    <div className="w-12 h-12 rounded bg-[var(--accent)]/20 flex items-center justify-center shrink-0">
+                      <PlayCircle className="w-6 h-6 text-[var(--accent)] group-hover:scale-110 transition" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate">{ep.episodeTitle}</div>
+                      <div className="text-xs text-muted-foreground truncate">
+                        {ep.podcastTitle}
+                      </div>
+                    </div>
+                    {ep.durationSec && (
+                      <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                        {Math.round(ep.durationSec / 60)} min
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Your Podcasts rail */}
+          <SpotifyRail title="Your Podcasts">
+            {filtered.map((p) => (
+              <div key={p.id} className="w-44 md:w-52 shrink-0">
+                <SpotifyCard
+                  title={p.title}
+                  subtitle={p.host}
+                  coverUrl={p.coverUrl}
+                  kind="podcast"
+                  badge={`${p.episodes.length} eps`}
+                  onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                  onPlay={() => playQueue(buildPodcastQueue(p))}
+                  isPlaying={currentPlayingPodcastId === p.id}
+                />
+              </div>
+            ))}
+          </SpotifyRail>
+        </>
+      )}
+
+      {/* Search results */}
+      {query && (
+        <div className="px-6 md:px-8">
+          <h2 className="text-lg font-bold mb-4">
+            {filtered.length} result{filtered.length === 1 ? '' : 's'} for "{query}"
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+            {filtered.map((p) => (
+              <SpotifyCard
+                key={p.id}
+                title={p.title}
+                subtitle={p.host}
+                coverUrl={p.coverUrl}
+                kind="podcast"
+                onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                onPlay={() => playQueue(buildPodcastQueue(p))}
+                isPlaying={currentPlayingPodcastId === p.id}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
-/* ----------------------------------------------------------------
- * Shared library view chrome (header + search + grid)
- * ---------------------------------------------------------------- */
-function LibraryView({
-  title,
-  icon,
-  query,
-  setQuery,
-  sortBy,
-  setSortBy,
-  sortOptions,
-  count,
-  emptyHint,
-  children,
-}: {
-  title: string
-  icon: React.ReactNode
-  query: string
-  setQuery: (q: string) => void
-  sortBy?: string
-  setSortBy?: (s: any) => void
-  sortOptions?: { value: string; label: string }[]
-  count: number
-  emptyHint: string
-  children: React.ReactNode
-}) {
+/* ---------------- Shared empty state ---------------- */
+function EmptyView({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="pb-12">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
-        <div className="flex items-center gap-2.5">
-          {icon}
-          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-          <span className="text-sm text-muted-foreground tabular-nums">
-            ({count})
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-8 w-44 md:w-56 bg-muted/50 border-border/40"
-            />
-          </div>
-          {setSortBy && sortOptions && (
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-3 py-2 text-xs rounded-md bg-muted/50 border border-border/40 hover:bg-muted transition-colors focus-ring"
-            >
-              {sortOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  Sort: {o.label}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
+      <h1 className="text-2xl font-bold tracking-tight mb-5">{title}</h1>
+      <div className="rounded-xl border border-dashed border-border/60 p-10 text-center">
+        <Clock className="w-8 h-8 text-muted-foreground/50 mx-auto mb-3" />
+        <p className="text-sm text-muted-foreground max-w-md mx-auto">{hint}</p>
       </div>
-      {count === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/60 p-10 text-center">
-          <Clock className="w-8 h-8 text-muted-foreground/50 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">{emptyHint}</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-          {children}
-        </div>
-      )}
     </div>
   )
 }

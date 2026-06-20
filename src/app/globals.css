@@ -104,6 +104,27 @@
     background-attachment: fixed;
     min-height: 100vh;
   }
+
+  /* ---------- View-specific accent themes ---------- *
+   *
+   * The accent color shifts depending on which section the user is viewing:
+   *  - .theme-cinema (Movies, Collections, TV): Netflix red
+   *  - .theme-audio  (Music, Podcasts):          Spotify green
+   *  - default (Home):                            Amber/rose (brand)
+   *
+   * Apply by adding the class to the main wrapper in page.tsx.
+   */
+
+  .theme-cinema {
+    --accent: oklch(0.62 0.25 27);
+    --accent-foreground: oklch(0.97 0.005 60);
+    --ring: oklch(0.62 0.25 27 / 60%);
+  }
+  .theme-audio {
+    --accent: oklch(0.72 0.19 150);
+    --accent-foreground: oklch(0.13 0.012 280);
+    --ring: oklch(0.72 0.19 150 / 60%);
+  }
 }
 
 /* Custom scrollbar — slim, cinematic */
@@ -264,4 +285,118 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+
+  /* ---------- Netflix-style card hover preview ---------- */
+  .netflix-card {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                z-index 0s 0.3s,
+                box-shadow 0.3s ease;
+  }
+  .netflix-card:hover {
+    transform: scale(1.25) translateY(-8px);
+    z-index: 30;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                z-index 0s 0s,
+                box-shadow 0.3s ease;
+  }
+  .netflix-card:hover .netflix-card-preview {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .netflix-card-preview {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.25s ease 0.1s, transform 0.25s ease 0.1s;
+  }
+
+  /* ---------- Spotify-style card hover ---------- */
+  .spotify-card {
+    transition: background-color 0.3s ease;
+  }
+  .spotify-card:hover .spotify-card-play {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .spotify-card:hover .spotify-card-image {
+    transform: scale(1.02);
+  }
+  .spotify-card-image {
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .spotify-card-play {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.25s ease, transform 0.25s ease, background-color 0.15s ease;
+  }
+
+  /* ---------- Horizontal rail arrow nav ---------- */
+  .rail-scroll {
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .rail-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ---------- Marquee text gradient for Spotify now-playing ---------- */
+  .text-fade-right {
+    mask-image: linear-gradient(to right, black 85%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  }
+
+  /* ---------- Genre chip ---------- */
+  .genre-chip {
+    transition: all 0.2s ease;
+  }
+  .genre-chip-active {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-color: var(--accent);
+  }
+
+  /* ---------- Top 10 huge number ---------- */
+  .top10-number {
+    font-size: clamp(8rem, 18vw, 14rem);
+    font-weight: 900;
+    line-height: 0.8;
+    letter-spacing: -0.05em;
+    background: linear-gradient(180deg, oklch(1 0 0 / 8%), oklch(1 0 0 / 2%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-stroke: 2px oklch(1 0 0 / 15%);
+    user-select: none;
+  }
+
+  /* ---------- Spotify green glow ---------- */
+  .spotify-glow {
+    box-shadow: 0 8px 24px oklch(0.72 0.19 150 / 30%),
+                0 0 0 1px oklch(0.72 0.19 150 / 20%);
+  }
+
+  /* ---------- Netflix red glow ---------- */
+  .netflix-glow {
+    box-shadow: 0 8px 32px oklch(0.62 0.25 27 / 40%),
+                0 0 0 1px oklch(0.62 0.25 27 / 20%);
+  }
+
+  /* ---------- Animated equalizer bars (Spotify-style) ---------- */
+  @keyframes eq-bar {
+    0%, 100% { height: 20%; }
+    50% { height: 100%; }
+  }
+  .eq-bar {
+    animation: eq-bar 0.8s ease-in-out infinite;
+  }
+
+  /* ---------- Hero gradient sweep ---------- */
+  @keyframes hero-sweep {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+  .hero-shimmer {
+    animation: hero-sweep 4s ease-in-out infinite;
+  }
 }
+

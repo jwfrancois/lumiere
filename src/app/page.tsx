@@ -7,6 +7,7 @@ import { ScanModal } from '@/components/scan-modal'
 import { MediaPlayer } from '@/components/media-player'
 import { DetailDrawer } from '@/components/detail-drawer'
 import { ReconnectBanner } from '@/components/reconnect-banner'
+import { SpotifyNowPlayingBar } from '@/components/spotify-now-playing-bar'
 import {
   HomeView,
   MoviesView,
@@ -19,6 +20,7 @@ import { useLibrary } from '@/store/library'
 import { useEnrichmentOrchestrator } from '@/hooks/use-enrichment-orchestrator'
 import { Button } from '@/components/ui/button'
 import { EnrichmentIndicator } from '@/components/enrichment-indicator'
+import { cn } from '@/lib/utils'
 
 export default function Home() {
   const [scanOpen, setScanOpen] = useState(false)
@@ -66,8 +68,6 @@ export default function Home() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (detail?.files && detail?.metadata) {
-        // Pass folderId=undefined so addFiles creates a new folder entry
-        // (passing a folderId would be interpreted as a reconnect).
         useLibrary.getState().addFiles(
           detail.files,
           detail.metadata,
@@ -82,8 +82,21 @@ export default function Home() {
       window.removeEventListener('lumiere:inject', handler as EventListener)
   }, [])
 
+  // Apply view-specific theme class to the root wrapper.
+  // - Cinema (Netflix red): movies, collections, tv
+  // - Audio (Spotify green): music, podcasts
+  // - Default (amber): home
+  const themeClass =
+    currentView === 'movies' ||
+    currentView === 'collections' ||
+    currentView === 'tv'
+      ? 'theme-cinema'
+      : currentView === 'music' || currentView === 'podcasts'
+        ? 'theme-audio'
+        : ''
+
   return (
-    <div className="min-h-screen flex">
+    <div className={cn('min-h-screen flex', themeClass)}>
       {/* Desktop sidebar */}
       <div className="hidden lg:block w-64 shrink-0 sticky top-0 h-screen">
         <Sidebar onScanClick={() => setScanOpen(true)} />
@@ -131,7 +144,14 @@ export default function Home() {
           </Button>
         </header>
 
-        <div className="flex-1 px-6 md:px-8 py-6 md:py-8">
+        <div
+          className={cn(
+            'flex-1 px-6 md:px-8 py-6 md:py-8',
+            // Add bottom padding for Spotify now-playing bar when in audio views
+            (currentView === 'music' || currentView === 'podcasts') &&
+              'pb-32',
+          )}
+        >
           <ReconnectBanner />
           {currentView === 'home' && <HomeView onScanClick={() => setScanOpen(true)} />}
           {currentView === 'movies' && <MoviesView />}
@@ -145,9 +165,13 @@ export default function Home() {
       {/* Floating enrichment indicator (bottom-left, doesn't block content) */}
       <EnrichmentIndicator />
 
+      {/* Spotify-style persistent now playing bar for audio views */}
+      <SpotifyNowPlayingBar />
+
       <ScanModal open={scanOpen} onOpenChange={setScanOpen} />
       <MediaPlayer />
       <DetailDrawer />
     </div>
   )
 }
+
