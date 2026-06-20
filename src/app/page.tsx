@@ -43,7 +43,9 @@ export default function Home() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (detail?.files && detail?.metadata) {
-        useLibrary.getState().addFiles(detail.files, detail.metadata)
+        useLibrary
+          .getState()
+          .addFiles(detail.files, detail.metadata, detail.folderName)
       }
     }
     window.addEventListener('lumiere:inject', handler as EventListener)

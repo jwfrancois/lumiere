@@ -17,6 +17,13 @@ import {
   CheckCircle2,
   AlertCircle,
   Info,
+  FolderPlus,
+  Trash2,
+  Film,
+  Tv,
+  Music,
+  Mic,
+  Layers,
 } from 'lucide-react'
 import {
   scanWithFSAccess,
@@ -27,6 +34,7 @@ import {
 import { extractMetadata } from '@/lib/metadata'
 import { useLibrary } from '@/store/library'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 
 interface ScanModalProps {
   open: boolean
@@ -49,6 +57,11 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
 
   const addFiles = useLibrary((s) => s.addFiles)
   const setScanning = useLibrary((s) => s.setScanning)
+  const scannedFolders = useLibrary((s) => s.scannedFolders)
+  const stats = useLibrary((s) => s.stats)
+  const reset = useLibrary((s) => s.reset)
+
+  const hasLibrary = scannedFolders.length > 0
 
   // Reset state when modal opens
   useEffect(() => {
@@ -72,7 +85,7 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
         setScanning(false)
         return
       }
-      await processFiles(result.files)
+      await processFiles(result.files, result.folderName)
     } catch (err) {
       console.error(err)
       setErrorMsg(err instanceof Error ? err.message : 'Scan failed')
@@ -98,7 +111,7 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
         found: result.files.length,
         currentPath: '',
       })
-      await processFiles(result.files)
+      await processFiles(result.files, result.folderName)
     } catch (err) {
       console.error(err)
       setErrorMsg(err instanceof Error ? err.message : 'Scan failed')
@@ -110,7 +123,10 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
     }
   }
 
-  const processFiles = async (files: ReturnType<typeof scanFromFileList>['files']) => {
+  const processFiles = async (
+    files: ReturnType<typeof scanFromFileList>['files'],
+    folderName?: string,
+  ) => {
     if (files.length === 0) {
       setPhase('done')
       setScanning(false)
@@ -141,13 +157,27 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
       // Yield to UI
       await new Promise((r) => setTimeout(r, 0))
     }
-    addFiles(files, metadata)
+    addFiles(files, metadata, folderName)
     setScanning(false)
     setPhase('done')
-    toast.success(`Library ready — ${files.length} media files catalogued`, {
-      description: 'Browse your collection using the sidebar.',
-    })
+    toast.success(
+      `Added ${files.length} media file${files.length === 1 ? '' : 's'} from ${folderName || 'folder'}`,
+      {
+        description: hasLibrary
+          ? 'Your library has been updated with the new items.'
+          : 'Browse your collection using the sidebar.',
+      },
+    )
     setTimeout(() => onOpenChange(false), 800)
+  }
+
+  const handleClearAll = () => {
+    reset()
+    setPhase('idle')
+    toast('Library cleared', {
+      description: 'Scan a folder to start a fresh library.',
+    })
+    setTimeout(() => onOpenChange(false), 200)
   }
 
   return (
@@ -156,12 +186,12 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <ScanLine className="w-5 h-5 text-amber-400" />
-            Scan Your Computer
+            {hasLibrary ? 'Add Another Folder' : 'Scan Your Computer'}
           </DialogTitle>
           <DialogDescription>
-            Pick any folder on your computer. Lumière will recursively find all
-            movies, TV episodes, music, and podcasts, and extract their
-            embedded metadata.
+            {hasLibrary
+              ? 'Pick another folder to add more media. New items are merged into your existing library — nothing is removed.'
+              : 'Pick any folder on your computer. Lumière will recursively find all movies, TV episodes, music, and podcasts, and extract their embedded metadata.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -178,6 +208,64 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
 
         {phase === 'idle' && (
           <div className="space-y-4 py-2">
+            {/* Already-scanned folders summary */}
+            {hasLibrary && (
+              <div className="rounded-xl bg-muted/40 border border-border/60 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+                    Already in library
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearAll}
+                    className="h-7 px-2 text-[11px] text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="w-3 h-3" /> Clear all
+                  </Button>
+                </div>
+                <div className="space-y-1 max-h-32 overflow-y-auto scrollbar-slim">
+                  {scannedFolders.map((f) => (
+                    <div
+                      key={f.id}
+                      className="flex items-center gap-2 text-xs py-0.5"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 text-amber-400/80 shrink-0" />
+                      <span className="flex-1 truncate font-mono text-muted-foreground">
+                        {f.name}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
+                        {f.fileCount} files
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {stats && (
+                  <div className="flex flex-wrap gap-1.5 pt-2 border-t border-border/40">
+                    {[
+                      { label: 'Movies', count: stats.standaloneMovies, icon: Film },
+                      { label: 'Collections', count: stats.collections, icon: Layers },
+                      { label: 'TV', count: stats.tvShows, icon: Tv },
+                      { label: 'Music', count: stats.albums, icon: Music },
+                      { label: 'Podcasts', count: stats.podcasts, icon: Mic },
+                    ].filter((s) => s.count > 0).map((s) => {
+                      const Icon = s.icon
+                      return (
+                        <div
+                          key={s.label}
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-background/60 text-[10px]"
+                        >
+                          <Icon className="w-3 h-3 text-amber-400/80" />
+                          <span className="text-muted-foreground">{s.count}</span>
+                          <span className="text-muted-foreground/70">{s.label}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="rounded-xl bg-muted/40 border border-border/60 p-4 space-y-3">
               <div className="flex items-start gap-2.5">
                 <Info className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
@@ -187,16 +275,39 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
                   servers, fully private.
                 </p>
               </div>
-              <div className="flex items-start gap-2.5">
-                <FolderOpen className="w-4 h-4 text-rose-400 mt-0.5 shrink-0" />
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  For best organization, point at a folder like{' '}
-                  <code className="px-1 py-0.5 rounded bg-background text-amber-300 text-[10px]">
-                    ~/Media
-                  </code>{' '}
-                  with subfolders for Movies, TV Shows, Music, Podcasts.
-                </p>
-              </div>
+              {!hasLibrary && (
+                <div className="flex items-start gap-2.5">
+                  <FolderOpen className="w-4 h-4 text-rose-400 mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    For best organization, point at a folder like{' '}
+                    <code className="px-1 py-0.5 rounded bg-background text-amber-300 text-[10px]">
+                      ~/Media
+                    </code>{' '}
+                    with subfolders for Movies, TV Shows, Music, Podcasts.
+                  </p>
+                </div>
+              )}
+              {hasLibrary && (
+                <div className="flex items-start gap-2.5">
+                  <FolderPlus className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    You can scan as many folders as you like — they all merge
+                    into a single library. Tip: scan your{' '}
+                    <code className="px-1 py-0.5 rounded bg-background text-amber-300 text-[10px]">
+                      TV Shows
+                    </code>
+                    ,{' '}
+                    <code className="px-1 py-0.5 rounded bg-background text-amber-300 text-[10px]">
+                      Music
+                    </code>
+                    , and{' '}
+                    <code className="px-1 py-0.5 rounded bg-background text-amber-300 text-[10px]">
+                      Podcasts
+                    </code>{' '}
+                    folders separately.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -205,16 +316,16 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
                   onClick={handleDirectoryPicker}
                   className="w-full bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-black font-semibold"
                 >
-                  <FolderOpen className="w-4 h-4" />
-                  Choose Folder
+                  <FolderPlus className="w-4 h-4" />
+                  {hasLibrary ? 'Choose Another Folder' : 'Choose Folder'}
                 </Button>
               ) : (
                 <Button
                   onClick={() => hiddenInputRef.current?.click()}
                   className="w-full bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-black font-semibold"
                 >
-                  <FolderOpen className="w-4 h-4" />
-                  Select Folder
+                  <FolderPlus className="w-4 h-4" />
+                  {hasLibrary ? 'Select Another Folder' : 'Select Folder'}
                 </Button>
               )}
               {isFSAccessSupported() && (

@@ -32,6 +32,14 @@ type DetailItem =
   | { kind: 'podcast'; id: string }
   | null
 
+export interface ScannedFolderInfo {
+  /** Stable id derived from the folder name + timestamp. */
+  id: string
+  name: string
+  fileCount: number
+  scannedAt: number
+}
+
 interface LibraryState {
   // Scan state
   isScanning: boolean
@@ -41,6 +49,8 @@ interface LibraryState {
   // Library data
   scannedFiles: ScannedFile[]
   rawMetadata: Record<string, MediaMetadata>
+  /** Folders the user has scanned so far. */
+  scannedFolders: ScannedFolderInfo[]
   movies: MovieItem[]
   collections: CollectionItem[]
   tvShows: TvShowItem[]
@@ -63,7 +73,11 @@ interface LibraryState {
   setScanning: (s: boolean) => void
   setScanProgress: (p: { scanned: number; found: number; currentPath: string }) => void
   setScanError: (e?: string) => void
-  addFiles: (files: ScannedFile[], metadata: Record<string, MediaMetadata>) => void
+  addFiles: (
+    files: ScannedFile[],
+    metadata: Record<string, MediaMetadata>,
+    folderName?: string,
+  ) => void
   reset: () => void
   setView: (v: ViewName) => void
   openDetail: (item: DetailItem) => void
@@ -80,6 +94,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   scanProgress: { scanned: 0, found: 0, currentPath: '' },
   scannedFiles: [],
   rawMetadata: {},
+  scannedFolders: [],
   movies: [],
   collections: [],
   tvShows: [],
@@ -94,7 +109,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   setScanning: (s) => set({ isScanning: s }),
   setScanProgress: (p) => set({ scanProgress: p }),
   setScanError: (e) => set({ scanError: e }),
-  addFiles: (files, metadata) => {
+  addFiles: (files, metadata, folderName) => {
     const existingFiles = get().scannedFiles
     const existingMeta = get().rawMetadata
     const allFiles = [...existingFiles, ...files]
@@ -104,9 +119,21 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       metadata: allMeta[f.id] || ({} as MediaMetadata),
     }))
     const result = categorizeFiles(input)
+    const scannedFolders = [...get().scannedFolders]
+    if (folderName && files.length > 0) {
+      scannedFolders.push({
+        id:
+          Math.random().toString(36).slice(2, 10) +
+          Date.now().toString(36).slice(-4),
+        name: folderName,
+        fileCount: files.length,
+        scannedAt: Date.now(),
+      })
+    }
     set({
       scannedFiles: allFiles,
       rawMetadata: allMeta,
+      scannedFolders,
       movies: result.movies,
       collections: result.collections,
       tvShows: result.tvShows,
@@ -119,6 +146,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     set({
       scannedFiles: [],
       rawMetadata: {},
+      scannedFolders: [],
       movies: [],
       collections: [],
       tvShows: [],

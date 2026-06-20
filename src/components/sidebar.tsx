@@ -10,6 +10,7 @@ import {
   ScanLine,
   Library,
   X,
+  FolderPlus,
 } from 'lucide-react'
 import { useLibrary, type ViewName } from '@/store/library'
 import { cn } from '@/lib/utils'
@@ -34,6 +35,8 @@ export function Sidebar({ onScanClick, onClose }: SidebarProps) {
   const currentView = useLibrary((s) => s.currentView)
   const setView = useLibrary((s) => s.setView)
   const stats = useLibrary((s) => s.stats)
+  const scannedFolders = useLibrary((s) => s.scannedFolders)
+  const hasLibrary = scannedFolders.length > 0
 
   return (
     <aside className="h-full w-full flex flex-col bg-sidebar border-r border-sidebar-border">
@@ -64,15 +67,25 @@ export function Sidebar({ onScanClick, onClose }: SidebarProps) {
         )}
       </div>
 
-      {/* Scan button */}
+      {/* Scan / Add-more button */}
       <div className="px-3 pb-3">
         <Button
           onClick={onScanClick}
           className="w-full justify-start gap-2 bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-black font-semibold border-0 shadow-md shadow-amber-500/20"
         >
-          <ScanLine className="w-4 h-4" />
-          Scan My Computer
+          {hasLibrary ? (
+            <FolderPlus className="w-4 h-4" />
+          ) : (
+            <ScanLine className="w-4 h-4" />
+          )}
+          {hasLibrary ? 'Add Another Folder' : 'Scan My Computer'}
         </Button>
+        {hasLibrary && (
+          <div className="mt-1.5 px-2 text-[10px] text-muted-foreground/70 text-center">
+            {scannedFolders.length} folder{scannedFolders.length === 1 ? '' : 's'} •{' '}
+            {scannedFolders.reduce((s, f) => s + f.fileCount, 0)} files
+          </div>
+        )}
       </div>
 
       {/* Nav */}

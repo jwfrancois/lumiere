@@ -85,6 +85,8 @@ export interface ScanProgress {
 
 export interface ScanResult {
   files: ScannedFile[]
+  /** Display name of the root folder that was scanned. */
+  folderName?: string
 }
 
 /** Scan using the File System Access API (preferred path). */
@@ -128,7 +130,7 @@ export async function scanWithFSAccess(
       currentPath: path,
     })
   }
-  return { files }
+  return { files, folderName: handle.name }
 }
 
 /**
@@ -137,23 +139,29 @@ export async function scanWithFSAccess(
  */
 export function scanFromFileList(fileList: FileList): ScanResult {
   const files: ScannedFile[] = []
+  let folderName: string | undefined
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i]
     const kind = classify(file.name)
     if (!kind) continue
     // webkitRelativePath gives "FolderName/sub/file.mp4"
-    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    const relPath =
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+      file.name
+    if (!folderName && relPath.includes('/')) {
+      folderName = relPath.split('/')[0]
+    }
     files.push({
       id: uid(),
       file,
       name: file.name,
-      path,
+      path: relPath,
       kind,
       size: file.size,
       url: URL.createObjectURL(file),
     })
   }
-  return { files }
+  return { files, folderName }
 }
 
 export function formatBytes(bytes: number): string {
