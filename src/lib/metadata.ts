@@ -813,24 +813,53 @@ function parseFlacPicture(buf: Uint8Array, meta: Partial<MediaMetadata>) {
 /**
  * Get duration by probing with HTMLMediaElement.
  * Used as a fallback when metadata doesn't include duration.
+ *
+ * Never throws — all errors are caught and resolved as `undefined`.
  */
 export function probeDuration(file: File): Promise<number | undefined> {
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(file)
-    const isAudio = file.type.startsWith('audio') || /\.(mp3|flac|m4a|aac|wav|ogg)$/i.test(file.name)
-    const el = document.createElement(isAudio ? 'audio' : 'video') as HTMLMediaElement
+    let url: string | undefined
+    try {
+      url = URL.createObjectURL(file)
+    } catch (err) {
+      // File is invalid or empty (e.g. a placeholder after reload) — bail.
+      console.warn('probeDuration: could not create object URL', file.name, err)
+      resolve(undefined)
+      return
+    }
+    const isAudio =
+      file.type.startsWith('audio') ||
+      /\.(mp3|flac|m4a|aac|wav|ogg)$/i.test(file.name)
+    const el = document.createElement(
+      isAudio ? 'audio' : 'video',
+    ) as HTMLMediaElement
     el.preload = 'metadata'
+    // Safety timeout — if the browser can't decode the file, neither
+    // onloadedmetadata nor onerror may fire. Resolve after 8s.
+    const timeout = setTimeout(() => {
+      URL.revokeObjectURL(url!)
+      resolve(undefined)
+    }, 8000)
     el.onloadedmetadata = () => {
+      clearTimeout(timeout)
       const d = el.duration
-      URL.revokeObjectURL(url)
+      URL.revokeObjectURL(url!)
       if (isFinite(d) && d > 0) resolve(d)
       else resolve(undefined)
     }
     el.onerror = () => {
-      URL.revokeObjectURL(url)
+      clearTimeout(timeout)
+      URL.revokeObjectURL(url!)
       resolve(undefined)
     }
-    el.src = url
+    try {
+      el.src = url
+    } catch (err) {
+      clearTimeout(timeout)
+      URL.revokeObjectURL(url!)
+      console.warn('probeDuration: could not set src', file.name, err)
+      resolve(undefined)
+    }
   })
 }
 
@@ -862,8 +891,13 @@ export async function extractMetadata(file: File): Promise<MediaMetadata> {
   }
 
   if (!meta.durationSec) {
-    const d = await probeDuration(file)
-    if (d) meta.durationSec = d
+    try {
+      const d = await probeDuration(file)
+      if (d) meta.durationSec = d
+    } catch (err) {
+      // probeDuration shouldn't throw, but guard anyway.
+      console.warn('probeDuration failed for', file.name, err)
+    }
   }
 
   // Infer title from filename if not embedded

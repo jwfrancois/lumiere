@@ -236,46 +236,86 @@ export function manifestToUnavailableFiles(
  * Re-walk a FileSystemDirectoryHandle to rebuild File objects for every
  * media file. Returns a map of `path → File` so callers can match against
  * the persisted manifest.
+ *
+ * Every step is guarded against NotFoundError — files/folders may have
+ * been moved, renamed, or deleted since the original scan.
  */
 export async function walkFsaHandle(
   handle: FileSystemDirectoryHandle,
   prefix = '',
 ): Promise<Array<{ file: File; path: string }>> {
   const out: Array<{ file: File; path: string }> = []
-  // @ts-expect-error - values() is in the FSA spec
-  for await (const entry of handle.values()) {
-    if (entry.kind === 'file') {
-      try {
-        const file = await (entry as FileSystemFileHandle).getFile()
-        out.push({ file, path: prefix + file.name })
-      } catch {
-        // skip
+  // The directory iteration itself can throw NotFoundError if the directory
+  // was moved/deleted since the handle was stored.
+  let iterator: AsyncIterable<FileSystemHandle>
+  try {
+    // @ts-expect-error - values() is in the FSA spec
+    iterator = handle.values()
+  } catch (err) {
+    console.warn('walkFsaHandle: could not iterate', handle.name, err)
+    return out
+  }
+  try {
+    // @ts-expect-error - values() is in the FSA spec
+    for await (const entry of iterator) {
+      if (entry.kind === 'file') {
+        try {
+          const file = await (entry as FileSystemFileHandle).getFile()
+          out.push({ file, path: prefix + file.name })
+        } catch (err) {
+          // File was deleted/moved between listing and read — skip it.
+          console.warn(
+            'walkFsaHandle: could not read file',
+            entry.name,
+            err,
+          )
+        }
+      } else if (entry.kind === 'directory') {
+        // Guard the recursive call — subdirectory may be unreadable.
+        try {
+          const sub = await walkFsaHandle(
+            entry as FileSystemDirectoryHandle,
+            prefix + entry.name + '/',
+          )
+          out.push(...sub)
+        } catch (err) {
+          console.warn(
+            'walkFsaHandle: could not recurse into',
+            entry.name,
+            err,
+          )
+        }
       }
-    } else if (entry.kind === 'directory') {
-      const sub = await walkFsaHandle(
-        entry as FileSystemDirectoryHandle,
-        prefix + entry.name + '/',
-      )
-      out.push(...sub)
     }
+  } catch (err) {
+    // Iteration itself failed mid-walk (e.g. permission revoked, directory
+    // moved). Log and return what we've collected so far.
+    console.warn('walkFsaHandle: iteration failed for', handle.name, err)
   }
   return out
 }
 
 /**
  * Request read permission for a FileSystemDirectoryHandle. Returns true if
- * permission was granted.
+ * permission was granted. Never throws — all errors are caught and reported
+ * as `false` so callers can fall back gracefully.
  */
 export async function ensurePermission(
   handle: FileSystemDirectoryHandle,
 ): Promise<boolean> {
-  // @ts-expect-error - queryPermission/requestPermission are not in TS DOM lib yet
-  if ((await handle.queryPermission?.({ mode: 'read' })) === 'granted') {
-    return true
+  try {
+    // @ts-expect-error - queryPermission/requestPermission not in TS DOM lib yet
+    if ((await handle.queryPermission?.({ mode: 'read' })) === 'granted') {
+      return true
+    }
+    // @ts-expect-error - requestPermission not in TS DOM lib yet
+    const result = await handle.requestPermission?.({ mode: 'read' })
+    return result === 'granted'
+  } catch (err) {
+    // Handle was invalidated (folder moved/deleted) — can't request permission.
+    console.warn('ensurePermission: failed for', handle.name, err)
+    return false
   }
-  // @ts-expect-error - requestPermission not in TS DOM lib yet
-  const result = await handle.requestPermission?.({ mode: 'read' })
-  return result === 'granted'
 }
 
 export function isFsaSupported(): boolean {

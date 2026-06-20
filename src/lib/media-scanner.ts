@@ -68,21 +68,51 @@ async function* walkDirectory(
   dirHandle: FileSystemDirectoryHandle,
   prefix = '',
 ): AsyncGenerator<{ file: File; path: string }> {
-  // @ts-expect-error - values() exists in the FSA spec
-  for await (const entry of dirHandle.values()) {
-    if (entry.kind === 'file') {
-      try {
-        const file = await (entry as FileSystemFileHandle).getFile()
-        yield { file, path: prefix + file.name }
-      } catch {
-        // skip files we can't read
+  // The directory iteration itself can throw NotFoundError if the directory
+  // was moved/deleted between the picker and the walk. Guard it.
+  let iterator: AsyncIterable<FileSystemHandle>
+  try {
+    // @ts-expect-error - values() exists in the FSA spec
+    iterator = dirHandle.values()
+  } catch (err) {
+    console.warn('walkDirectory: could not iterate', dirHandle.name, err)
+    return
+  }
+  try {
+    // @ts-expect-error - values() exists in the FSA spec
+    for await (const entry of iterator) {
+      if (entry.kind === 'file') {
+        try {
+          const file = await (entry as FileSystemFileHandle).getFile()
+          yield { file, path: prefix + file.name }
+        } catch (err) {
+          // File was deleted/moved between listing and read — skip it.
+          console.warn(
+            'walkDirectory: could not read file',
+            entry.name,
+            err,
+          )
+        }
+      } else if (entry.kind === 'directory') {
+        // Guard the recursive call — subdirectory may be unreadable.
+        try {
+          yield* walkDirectory(
+            entry as FileSystemDirectoryHandle,
+            prefix + entry.name + '/',
+          )
+        } catch (err) {
+          console.warn(
+            'walkDirectory: could not recurse into',
+            entry.name,
+            err,
+          )
+        }
       }
-    } else if (entry.kind === 'directory') {
-      yield* walkDirectory(
-        entry as FileSystemDirectoryHandle,
-        prefix + entry.name + '/',
-      )
     }
+  } catch (err) {
+    // Iteration itself failed mid-walk (e.g. permission revoked, directory
+    // moved). Log and return what we've collected so far.
+    console.warn('walkDirectory: iteration failed for', dirHandle.name, err)
   }
 }
 

@@ -428,8 +428,12 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         if (!handle) continue
         const ok = await ensurePermission(handle)
         if (!ok) continue
+        // reconnectFolder is fully guarded — never throws.
         await get().reconnectFolder(folder.id)
       }
+    } catch (err) {
+      // Should never happen (all sub-calls are guarded), but just in case.
+      console.error('reconnectAllFolders: unexpected error', err)
     } finally {
       set({ isReconnecting: false })
     }
@@ -451,12 +455,26 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         set({ isReconnecting: false })
         return false
       }
-      // Re-walk the handle and rebuild File + url for every media file
+      // Re-walk the handle and rebuild File + url for every media file.
+      // walkFsaHandle is fully guarded against NotFoundError — files/folders
+      // that have been moved or deleted since the scan are simply skipped.
       const walked = await walkFsaHandle(handle)
+      if (walked.length === 0) {
+        // Folder is empty or completely unreadable (e.g. moved). Mark
+        // the folder as still-disconnected and bail out.
+        console.warn(
+          'reconnectFolder: no readable files in',
+          folder.name,
+          '— folder may have been moved or deleted',
+        )
+        set({ isReconnecting: false })
+        return false
+      }
       // Match walked files against the persisted manifest by relative path.
       const filesByPath = new Map(walked.map((w) => [w.path, w.file]))
       const scannedFiles = [...get().scannedFiles]
       let reconnectedCount = 0
+      let missingCount = 0
       for (let i = 0; i < scannedFiles.length; i++) {
         const f = scannedFiles[i]
         if (f.folderId !== folderId) continue
@@ -469,6 +487,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
             unavailable: false,
           }
           reconnectedCount++
+        } else {
+          // File was in the manifest but no longer exists on disk.
+          // Leave it as unavailable so the UI can show it as missing.
+          scannedFiles[i] = { ...f, unavailable: true }
+          missingCount++
         }
       }
       const scannedFolders = get().scannedFolders.map((sf) =>
@@ -476,8 +499,18 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       )
       set({ scannedFiles, scannedFolders })
       schedulePersist()
-      void reconnectedCount
+      if (missingCount > 0) {
+        console.info(
+          `reconnectFolder: ${reconnectedCount} files reconnected, ${missingCount} missing from "${folder.name}"`,
+        )
+      }
       return true
+    } catch (err) {
+      // Catch-all for any unexpected errors (e.g. handle invalidated,
+      // IndexedDB corruption, etc.) — never let reconnect throw to the UI.
+      console.error('reconnectFolder: unexpected error for', folder.name, err)
+      set({ isReconnecting: false })
+      return false
     } finally {
       set({ isReconnecting: false })
     }

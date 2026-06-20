@@ -352,14 +352,27 @@ export function MediaPlayer() {
   useEffect(() => {
     const el = videoRef.current || audioRef.current
     if (!el || !currentItem) return
-    el.load()
+    // Guard against unavailable files (e.g. after reload, before reconnect).
+    // The ReconnectPrompt handles these — we shouldn't try to load them.
+    if (currentItem.file.unavailable || !currentItem.file.url) return
+    try {
+      el.load()
+    } catch (err) {
+      console.warn('media load failed', err)
+    }
     const tryPlay = async () => {
       if (audioCtxRef.current?.state === 'suspended') {
-        await audioCtxRef.current.resume()
+        try {
+          await audioCtxRef.current.resume()
+        } catch (err) {
+          console.warn('audio context resume failed', err)
+        }
       }
       try {
         await el.play()
       } catch (err) {
+        // Autoplay can be blocked by browser policy, or the source may be
+        // invalid. Either way, don't crash — the user can click play.
         console.warn('autoplay blocked — user must click play', err)
       }
     }
