@@ -15,13 +15,18 @@ import {
   PodcastsView,
 } from '@/components/library-views'
 import { useLibrary } from '@/store/library'
+import { useEnrichmentOrchestrator } from '@/hooks/use-enrichment-orchestrator'
 import { Button } from '@/components/ui/button'
+import { EnrichmentIndicator } from '@/components/enrichment-indicator'
 
 export default function Home() {
   const [scanOpen, setScanOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const currentView = useLibrary((s) => s.currentView)
   const hasLibrary = useLibrary((s) => s.scannedFiles.length > 0)
+
+  // Kick off background metadata enrichment for new movies / TV shows.
+  useEnrichmentOrchestrator()
 
   // Auto-open the scan modal once on first mount if the library is empty.
   // We use a ref-like guard so the modal doesn't re-open when the user
@@ -111,6 +116,9 @@ export default function Home() {
           {currentView === 'podcasts' && <PodcastsView />}
         </div>
       </main>
+
+      {/* Floating enrichment indicator (bottom-left, doesn't block content) */}
+      <EnrichmentIndicator />
 
       <ScanModal open={scanOpen} onOpenChange={setScanOpen} />
       <MediaPlayer />

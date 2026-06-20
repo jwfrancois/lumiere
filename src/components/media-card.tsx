@@ -1,9 +1,21 @@
 'use client'
 
-import { Play, Info, Star, Clock } from 'lucide-react'
+import { Play, Info, Star, Clock, Loader2 } from 'lucide-react'
 import { PosterArt } from './poster-art'
 import { formatDuration } from '@/lib/metadata'
 import { cn } from '@/lib/utils'
+import { useLibrary } from '@/store/library'
+
+export interface CardEnrichment {
+  posterUrl?: string
+  imdbRating?: number
+  rottenTomatoes?: number
+  metacritic?: number
+  plot?: string
+  genre?: string
+  runtime?: string
+  rated?: string
+}
 
 interface MediaCardProps {
   title: string
@@ -15,6 +27,15 @@ interface MediaCardProps {
   badge?: string
   kind: 'movie' | 'tv' | 'album' | 'podcast' | 'collection'
   aspect?: 'portrait' | 'square'
+  /**
+   * Enrichment key — when provided, the card will look up its own
+   * enrichment from the global store and reflect "enriching" status.
+   * e.g. `movie:<id>`, `tv:<id>`, `collection:<id>`.
+   * Omit for albums / podcasts (no enrichment).
+   */
+  enrichmentKey?: string
+  /** Initial enrichment (used for tests). */
+  initialEnrichment?: CardEnrichment
   onClick?: () => void
   onPlay?: () => void
 }
@@ -29,11 +50,29 @@ export function MediaCard({
   badge,
   kind,
   aspect = 'portrait',
+  enrichmentKey,
+  initialEnrichment,
   onClick,
   onPlay,
 }: MediaCardProps) {
   const aspectClass =
     aspect === 'portrait' ? 'aspect-[2/3]' : 'aspect-square'
+
+  // Look up enrichment + enriching status from the global store.
+  // When no key is provided (albums/podcasts), both are no-ops.
+  const enrichment = useLibrary((s) =>
+    enrichmentKey ? s.enrichment[enrichmentKey] : undefined,
+  ) as CardEnrichment | undefined
+  const enriching = useLibrary((s) =>
+    enrichmentKey ? s.enriching.has(enrichmentKey) : false,
+  )
+
+  // Prefer embedded cover, then enriched poster, then gradient placeholder.
+  const effectiveEnrichment = enrichment || initialEnrichment
+  const posterUrl = coverUrl || effectiveEnrichment?.posterUrl
+  // For rating, prefer explicit prop, then enrichment IMDb.
+  const effectiveRating = rating ?? effectiveEnrichment?.imdbRating
+  const rtScore = effectiveEnrichment?.rottenTomatoes
 
   return (
     <div className="group relative cursor-pointer" onClick={onClick}>
@@ -44,20 +83,27 @@ export function MediaCard({
           aspectClass,
         )}
       >
-        <PosterArt coverUrl={coverUrl} title={title} kind={kind} />
+        <PosterArt coverUrl={posterUrl} title={title} kind={kind} />
 
-        {/* Top-left badge */}
+        {/* Top-left badge (e.g. "3 films", "4 tracks") */}
         {badge && (
           <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide bg-black/70 backdrop-blur text-amber-300 border border-amber-500/30">
             {badge}
           </div>
         )}
 
-        {/* Top-right rating */}
-        {rating !== undefined && (
+        {/* Top-right rating (IMDb) */}
+        {effectiveRating !== undefined && (
           <div className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-black/70 backdrop-blur text-amber-300 border border-amber-500/20">
             <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-            {rating.toFixed(1)}
+            {effectiveRating.toFixed(1)}
+          </div>
+        )}
+
+        {/* "Enriching" pulse — small spinner in top-right while fetching */}
+        {!effectiveRating && enriching && (
+          <div className="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded-md text-[10px] bg-black/70 backdrop-blur text-muted-foreground flex items-center gap-1 border border-white/10">
+            <Loader2 className="w-2.5 h-2.5 animate-spin" />
           </div>
         )}
 
@@ -85,6 +131,11 @@ export function MediaCard({
           </h3>
           <div className="flex items-center gap-2 mt-1 text-[11px] text-white/60 tabular-nums">
             {year && <span>{year}</span>}
+            {effectiveEnrichment?.rated && effectiveEnrichment.rated !== 'N/A' && (
+              <span className="px-1 py-0 rounded border border-white/30 text-[9px] uppercase">
+                {effectiveEnrichment.rated}
+              </span>
+            )}
             {durationSec !== undefined && (
               <span className="flex items-center gap-1">
                 <Clock className="w-3 h-3" />
@@ -92,10 +143,20 @@ export function MediaCard({
               </span>
             )}
           </div>
-          {subtitle && (
+          {effectiveEnrichment?.genre && (
+            <p className="mt-0.5 text-[10px] text-amber-300/70 line-clamp-1">
+              {effectiveEnrichment.genre}
+            </p>
+          )}
+          {subtitle && !effectiveEnrichment?.genre && (
             <p className="mt-0.5 text-[11px] text-amber-300/80 line-clamp-1">
               {subtitle}
             </p>
+          )}
+          {rtScore !== undefined && (
+            <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600/80 text-white text-[9px] font-bold">
+              RT {rtScore}%
+            </div>
           )}
         </div>
       </div>

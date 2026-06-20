@@ -40,6 +40,22 @@ export interface ScannedFolderInfo {
   scannedAt: number
 }
 
+/** Enrichment data fetched from OMDB. */
+export interface EnrichedInfo {
+  posterUrl?: string
+  imdbRating?: number
+  rottenTomatoes?: number
+  metacritic?: number
+  plot?: string
+  genre?: string
+  runtime?: string
+  rated?: string
+  director?: string
+  cast?: string
+  awards?: string
+  totalSeasons?: number
+}
+
 interface LibraryState {
   // Scan state
   isScanning: boolean
@@ -57,6 +73,19 @@ interface LibraryState {
   albums: AlbumItem[]
   podcasts: PodcastItem[]
   stats?: CategorizationResult['stats']
+
+  /**
+   * Enrichment data keyed by a stable media-group key.
+   * For movies: `movie:<id>`
+   * For TV shows: `tv:<id>`
+   * For collections: `collection:<id>`
+   * (Albums and podcasts use embedded cover art only — no enrichment.)
+   */
+  enrichment: Record<string, EnrichedInfo>
+  /** Items currently being enriched. */
+  enriching: Set<string>
+  /** Whether background enrichment is running. */
+  isEnriching: boolean
 
   // Current view
   currentView: ViewName
@@ -87,6 +116,11 @@ interface LibraryState {
   next: () => void
   prev: () => void
   closePlayer: () => void
+  // Enrichment actions
+  markEnriching: (key: string) => void
+  setEnrichment: (key: string, info: EnrichedInfo) => void
+  clearEnriching: (key: string) => void
+  setIsEnriching: (s: boolean) => void
 }
 
 export const useLibrary = create<LibraryState>((set, get) => ({
@@ -100,6 +134,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   tvShows: [],
   albums: [],
   podcasts: [],
+  enrichment: {},
+  enriching: new Set<string>(),
+  isEnriching: false,
   currentView: 'home',
   detailItem: null,
   queue: [],
@@ -156,6 +193,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       detailItem: null,
       queue: [],
       isPlayerOpen: false,
+      enrichment: {},
+      enriching: new Set<string>(),
+      isEnriching: false,
     }),
   setView: (v) => set({ currentView: v }),
   openDetail: (item) => set({ detailItem: item }),
@@ -186,6 +226,23 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }
   },
   closePlayer: () => set({ isPlayerOpen: false }),
+  markEnriching: (key) =>
+    set((s) => {
+      const next = new Set(s.enriching)
+      next.add(key)
+      return { enriching: next }
+    }),
+  setEnrichment: (key, info) =>
+    set((s) => ({
+      enrichment: { ...s.enrichment, [key]: info },
+    })),
+  clearEnriching: (key) =>
+    set((s) => {
+      const next = new Set(s.enriching)
+      next.delete(key)
+      return { enriching: next }
+    }),
+  setIsEnriching: (s) => set({ isEnriching: s }),
 }))
 
 /** Convenience hook to build a movie-by-id map (re-derived on each render). */

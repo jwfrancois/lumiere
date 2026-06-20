@@ -62,8 +62,12 @@ export function DetailDrawer() {
   if (detailItem.kind === 'movie') {
     const movie = movies.find((m) => m.id === detailItem.id)
     if (!movie) return null
+    // Look up enrichment (OMDB data: poster, IMDb/RT/Metacritic, plot, etc.)
+    const enrichmentKey = `movie:${movie.id}`
+    const enrich = useLibrary.getState().enrichment[enrichmentKey]
     title = movie.title
-    description = movie.metadata.description || movie.metadata.artist || ''
+    description =
+      enrich?.plot || movie.metadata.description || movie.metadata.artist || ''
     content = (
       <div className="space-y-4">
         <div className="flex gap-3">
@@ -103,15 +107,41 @@ export function DetailDrawer() {
           </Button>
         </div>
 
+        {/* Ratings row — IMDb / RT / Metacritic */}
+        {(enrich?.imdbRating !== undefined ||
+          enrich?.rottenTomatoes !== undefined ||
+          enrich?.metacritic !== undefined) && (
+          <div className="flex gap-2">
+            {enrich?.imdbRating !== undefined && (
+              <RatingPill label="IMDb" value={enrich.imdbRating.toFixed(1)} color="amber" />
+            )}
+            {enrich?.rottenTomatoes !== undefined && (
+              <RatingPill label="RT" value={`${enrich.rottenTomatoes}%`} color="rose" />
+            )}
+            {enrich?.metacritic !== undefined && (
+              <RatingPill label="Metacritic" value={String(enrich.metacritic)} color="emerald" />
+            )}
+          </div>
+        )}
+
         <DetailMeta
           rows={[
-            movie.year && { icon: Calendar, label: 'Year', value: String(movie.year) },
-            movie.metadata.durationSec && {
+            (enrich?.year || movie.year) && { icon: Calendar, label: 'Year', value: String(enrich?.year || movie.year) },
+            (enrich?.runtime || movie.metadata.durationSec) && {
               icon: Clock,
               label: 'Runtime',
-              value: formatRuntimeLong(movie.metadata.durationSec),
+              value: enrich?.runtime || formatRuntimeLong(movie.metadata.durationSec),
             },
-            movie.metadata.genre && { icon: Star, label: 'Genre', value: movie.metadata.genre },
+            (enrich?.genre || movie.metadata.genre) && {
+              icon: Star,
+              label: 'Genre',
+              value: enrich?.genre || movie.metadata.genre || '',
+            },
+            enrich?.rated && enrich.rated !== 'N/A' && {
+              icon: Tv,
+              label: 'Rated',
+              value: enrich.rated,
+            },
             movie.metadata.videoCodec && {
               icon: Tv,
               label: 'Video',
@@ -130,19 +160,38 @@ export function DetailDrawer() {
           ].filter(Boolean) as { icon: typeof Calendar; label: string; value: string }[]}
         />
 
-        {description && (
+        {(description || enrich?.plot) && (
           <div>
             <h4 className="text-sm font-semibold mb-2 text-amber-300/90">Synopsis</h4>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              {description}
+              {enrich?.plot || description}
             </p>
           </div>
         )}
 
-        {movie.metadata.composer && (
+        {(enrich?.director || enrich?.cast || movie.metadata.composer) && (
           <DetailMeta
-            rows={[{ icon: User, label: 'Director', value: movie.metadata.composer }]}
+            rows={[
+              (enrich?.director || movie.metadata.composer) && {
+                icon: User,
+                label: 'Director',
+                value: enrich?.director || movie.metadata.composer || '',
+              },
+              enrich?.cast && { icon: User, label: 'Cast', value: enrich.cast },
+            ].filter(Boolean) as { icon: typeof Calendar; label: string; value: string }[]}
           />
+        )}
+
+        {enrich?.awards && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+            <Star className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium">
+                Awards
+              </div>
+              <div className="text-xs text-foreground">{enrich.awards}</div>
+            </div>
+          </div>
         )}
 
         <div className="rounded-lg bg-muted/40 border border-border/40 p-3 text-xs">
@@ -156,8 +205,10 @@ export function DetailDrawer() {
   } else if (detailItem.kind === 'collection') {
     const collection = collections.find((c) => c.id === detailItem.id)
     if (!collection) return null
+    const enrich = useLibrary.getState().enrichment[`collection:${collection.id}`]
     title = collection.title
-    description = `${collection.movieIds.length} movies in this collection`
+    description =
+      enrich?.plot || `${collection.movieIds.length} movies in this collection`
     const collMovies = collection.movieIds
       .map((id) => moviesById.get(id))
       .filter((m): m is NonNullable<typeof m> => Boolean(m))
@@ -178,42 +229,80 @@ export function DetailDrawer() {
           </Button>
         </div>
 
+        {/* Ratings row */}
+        {(enrich?.imdbRating !== undefined ||
+          enrich?.rottenTomatoes !== undefined ||
+          enrich?.metacritic !== undefined) && (
+          <div className="flex gap-2">
+            {enrich?.imdbRating !== undefined && (
+              <RatingPill label="IMDb" value={enrich.imdbRating.toFixed(1)} color="amber" />
+            )}
+            {enrich?.rottenTomatoes !== undefined && (
+              <RatingPill label="RT" value={`${enrich.rottenTomatoes}%`} color="rose" />
+            )}
+            {enrich?.metacritic !== undefined && (
+              <RatingPill label="Metacritic" value={String(enrich.metacritic)} color="emerald" />
+            )}
+          </div>
+        )}
+
+        {enrich?.plot && (
+          <div>
+            <h4 className="text-sm font-semibold mb-2 text-amber-300/90">About the Collection</h4>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {enrich.plot}
+            </p>
+          </div>
+        )}
+
         <div>
           <h4 className="text-sm font-semibold mb-2 text-amber-300/90 flex items-center gap-2">
             <Layers className="w-4 h-4" />
             Films in Collection ({collMovies.length})
           </h4>
           <div className="space-y-1.5">
-            {collMovies.map((m, i) => (
-              <button
-                key={m.id}
-                onClick={() => {
-                  const queue = buildCollectionQueue(collection, moviesById)
-                  playQueue(queue, i)
-                }}
-                className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-muted/60 transition-colors text-left group"
-              >
-                <div className="w-8 h-8 rounded-full bg-amber-500/15 text-amber-300 flex items-center justify-center text-xs font-bold shrink-0">
-                  {i + 1}
-                </div>
-                <div className="w-12 h-16 rounded overflow-hidden bg-muted shrink-0">
-                  <PosterArt coverUrl={m.coverUrl} title={m.title} kind="movie" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{m.title}</div>
-                  <div className="text-xs text-muted-foreground flex items-center gap-2">
-                    {m.year && <span>{m.year}</span>}
-                    {m.metadata.durationSec && (
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatDuration(m.metadata.durationSec)}
-                      </span>
-                    )}
+            {collMovies.map((m, i) => {
+              const mEnrich = useLibrary.getState().enrichment[`movie:${m.id}`]
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => {
+                    const queue = buildCollectionQueue(collection, moviesById)
+                    playQueue(queue, i)
+                  }}
+                  className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-muted/60 transition-colors text-left group"
+                >
+                  <div className="w-8 h-8 rounded-full bg-amber-500/15 text-amber-300 flex items-center justify-center text-xs font-bold shrink-0">
+                    {i + 1}
                   </div>
-                </div>
-                <Play className="w-4 h-4 text-muted-foreground group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition" />
-              </button>
-            ))}
+                  <div className="w-12 h-16 rounded overflow-hidden bg-muted shrink-0">
+                    <PosterArt
+                      coverUrl={m.coverUrl || mEnrich?.posterUrl}
+                      title={m.title}
+                      kind="movie"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium truncate">{m.title}</div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                      {m.year && <span>{m.year}</span>}
+                      {mEnrich?.imdbRating !== undefined && (
+                        <span className="flex items-center gap-0.5 text-amber-400">
+                          ★ {mEnrich.imdbRating.toFixed(1)}
+                        </span>
+                      )}
+                      {m.metadata.durationSec && (
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {formatDuration(m.metadata.durationSec)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <Play className="w-4 h-4 text-muted-foreground group-hover:text-amber-300 opacity-0 group-hover:opacity-100 transition" />
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>
@@ -427,15 +516,18 @@ export function DetailDrawer() {
   let kind: 'movie' | 'tv' | 'album' | 'podcast' | 'collection' = 'movie'
   if (detailItem.kind === 'movie') {
     const m = movies.find((x) => x.id === detailItem.id)
-    coverUrl = m?.coverUrl
+    const enrich = useLibrary.getState().enrichment[`movie:${detailItem.id}`]
+    coverUrl = m?.coverUrl || enrich?.posterUrl
     kind = 'movie'
   } else if (detailItem.kind === 'collection') {
     const c = collections.find((x) => x.id === detailItem.id)
-    coverUrl = c?.coverUrl
+    const enrich = useLibrary.getState().enrichment[`collection:${detailItem.id}`]
+    coverUrl = c?.coverUrl || enrich?.posterUrl
     kind = 'collection'
   } else if (detailItem.kind === 'tv') {
     const s = tvShows.find((x) => x.id === detailItem.id)
-    coverUrl = s?.coverUrl
+    const enrich = useLibrary.getState().enrichment[`tv:${detailItem.id}`]
+    coverUrl = s?.coverUrl || enrich?.posterUrl
     kind = 'tv'
   } else if (detailItem.kind === 'album') {
     const a = albums.find((x) => x.id === detailItem.id)
@@ -524,6 +616,32 @@ function DetailMeta({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function RatingPill({
+  label,
+  value,
+  color,
+}: {
+  label: string
+  value: string
+  color: 'amber' | 'rose' | 'emerald'
+}) {
+  const colorClasses = {
+    amber: 'bg-amber-500/15 border-amber-500/40 text-amber-300',
+    rose: 'bg-rose-500/15 border-rose-500/40 text-rose-300',
+    emerald: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300',
+  }[color]
+  return (
+    <div
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${colorClasses}`}
+    >
+      <span className="text-[10px] uppercase tracking-wider opacity-70 font-medium">
+        {label}
+      </span>
+      <span className="text-sm font-bold tabular-nums">{value}</span>
     </div>
   )
 }

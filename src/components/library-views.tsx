@@ -51,17 +51,28 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
     albums.length === 0 &&
     podcasts.length === 0
 
-  if (isEmpty) {
-    return <EmptyHome onScanClick={onScanClick} />
-  }
-
   // Featured = first collection OR first movie OR first TV show with art
   const featured =
     collections[0] ||
     (movies.length > 0 ? movies[0] : undefined) ||
     (tvShows.length > 0 ? tvShows[0] : undefined)
 
-  const featuredCover = featured?.coverUrl
+  // Look up enrichment for the featured item so we can use the real poster
+  // for the hero backdrop + show IMDb rating / plot. Must be called before
+  // any early return — Hooks rule.
+  const featuredEnrichmentKey = featured
+    ? 'movieIds' in featured
+      ? `collection:${featured.id}`
+      : 'seasons' in featured
+        ? `tv:${featured.id}`
+        : `movie:${featured.id}`
+    : '__none__'
+  const featuredEnrichment = useLibrary((s) => s.enrichment[featuredEnrichmentKey])
+  const featuredCover = featured?.coverUrl || featuredEnrichment?.posterUrl
+
+  if (isEmpty) {
+    return <EmptyHome onScanClick={onScanClick} />
+  }
 
   return (
     <div className="space-y-10 pb-12">
@@ -85,17 +96,34 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="w-4 h-4 text-amber-400" />
               <span className="text-xs uppercase tracking-widest text-amber-300/90 font-medium">
-                Featured {featured.category === 'movie' && 'collection' in featured ? 'Collection' : featured.category}
+                Featured {featured.category === 'movie' && 'movieIds' in featured ? 'Collection' : featured.category}
               </span>
+              {featuredEnrichment?.imdbRating !== undefined && (
+                <span className="ml-1 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-black/60 backdrop-blur text-amber-300 border border-amber-500/30">
+                  ★ {featuredEnrichment.imdbRating.toFixed(1)}
+                </span>
+              )}
             </div>
             <h1 className="text-4xl md:text-6xl font-bold leading-[1.05] tracking-tight mb-3">
               {featured.title}
             </h1>
-            {featured.year && (
-              <p className="text-sm text-muted-foreground mb-4">
-                {featured.year}
-                {'totalEpisodes' in featured && ` · ${featured.totalEpisodes} episodes`}
-                {'tracks' in featured && ` · ${featured.tracks.length} tracks`}
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground mb-3">
+              {featured.year && <span>{featured.year}</span>}
+              {featuredEnrichment?.rated && featuredEnrichment.rated !== 'N/A' && (
+                <span className="px-1.5 py-0 rounded border border-white/30 text-[10px] uppercase">
+                  {featuredEnrichment.rated}
+                </span>
+              )}
+              {featuredEnrichment?.genre && <span>{featuredEnrichment.genre}</span>}
+              {'totalEpisodes' in featured && ` · ${featured.totalEpisodes} episodes`}
+              {'tracks' in featured && ` · ${featured.tracks.length} tracks`}
+              {featuredEnrichment?.runtime && (
+                <span>· {featuredEnrichment.runtime}</span>
+              )}
+            </div>
+            {featuredEnrichment?.plot && (
+              <p className="text-sm text-muted-foreground mb-4 line-clamp-2 max-w-2xl">
+                {featuredEnrichment.plot}
               </p>
             )}
             <div className="flex items-center gap-3">
@@ -187,6 +215,7 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
                 year={c.year}
                 badge={`${c.movieIds.length} films`}
                 aspect="portrait"
+                enrichmentKey={`collection:${c.id}`}
                 onClick={() => openDetail({ kind: 'collection', id: c.id })}
                 onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
               />
@@ -215,6 +244,7 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
                   durationSec={m.metadata.durationSec}
                   genre={m.genre}
                   aspect="portrait"
+                  enrichmentKey={`movie:${m.id}`}
                   onClick={() => openDetail({ kind: 'movie', id: m.id })}
                   onPlay={() =>
                     playQueue([
@@ -249,6 +279,7 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
                 year={s.year}
                 badge={`${s.totalEpisodes} eps`}
                 aspect="portrait"
+                enrichmentKey={`tv:${s.id}`}
                 onClick={() => openDetail({ kind: 'tv', id: s.id })}
                 onPlay={() => playQueue(buildShowQueue(s))}
               />
@@ -433,6 +464,7 @@ export function MoviesView() {
             durationSec={m.metadata.durationSec}
             genre={m.genre}
             aspect="portrait"
+            enrichmentKey={`movie:${m.id}`}
             onClick={() => openDetail({ kind: 'movie', id: m.id })}
             onPlay={() =>
               playQueue([
@@ -486,6 +518,7 @@ export function CollectionsView() {
             year={c.year}
             badge={`${c.movieIds.length} films`}
             aspect="portrait"
+            enrichmentKey={`collection:${c.id}`}
             onClick={() => openDetail({ kind: 'collection', id: c.id })}
             onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
           />
@@ -528,6 +561,7 @@ export function TvView() {
             year={s.year}
             badge={`${s.totalEpisodes} eps`}
             aspect="portrait"
+            enrichmentKey={`tv:${s.id}`}
             onClick={() => openDetail({ kind: 'tv', id: s.id })}
             onPlay={() => playQueue(buildShowQueue(s))}
           />
