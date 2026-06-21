@@ -822,26 +822,39 @@ export function CollectionsView() {
           </>
         )}
       </div>
-      <NetflixRail title={`Collections (${filtered.length})`}>
-        {filtered.map((c) => {
-          const collMovies = c.movieIds
-            .map((id) => moviesById.get(id))
-            .filter((m): m is NonNullable<typeof m> => Boolean(m))
-          return (
-            <CollectionCard
-              key={c.id}
-              title={c.title}
-              year={c.year}
-              coverUrl={c.coverUrl}
-              enrichmentKey={`collection:${c.id}`}
-              movieIds={c.movieIds}
-              movies={collMovies}
-              onClick={() => openDetail({ kind: 'collection', id: c.id })}
-              onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
-            />
-          )
-        })}
-      </NetflixRail>
+      {/* Collections grid — shows ALL collections */}
+      <div className="px-6 md:px-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold">
+            Collections ({filtered.length})
+          </h2>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          {filtered.map((c) => {
+            const collMovies = c.movieIds
+              .map((id) => moviesById.get(id))
+              .filter((m): m is NonNullable<typeof m> => Boolean(m))
+            return (
+              <CollectionCard
+                key={c.id}
+                title={c.title}
+                year={c.year}
+                coverUrl={c.coverUrl}
+                enrichmentKey={`collection:${c.id}`}
+                movieIds={c.movieIds}
+                movies={collMovies}
+                onClick={() => openDetail({ kind: 'collection', id: c.id })}
+                onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
+              />
+            )
+          })}
+        </div>
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-sm text-muted-foreground">
+            No collections match your search.
+          </div>
+        )}
+      </div>
       {managerOpen && (
         <CollectionManager
           key="new-collection"
