@@ -40,6 +40,7 @@ import {
   CollectionManager,
   CollectionsEmptyState,
 } from './collection-manager'
+import { CollectionCard } from './collection-card'
 
 /* ----------------------------------------------------------------
  * Home view — keeps the original dashboard style
@@ -215,21 +216,24 @@ export function HomeView({ onScanClick }: { onScanClick: () => void }) {
           icon={<Layers className="w-4 h-4 text-amber-400" />}
           onSeeAll={() => setView('collections')}
         >
-          {collections.slice(0, 12).map((c) => (
-            <div key={c.id} className="w-44 md:w-52 shrink-0">
-              <MediaCard
-                kind="collection"
+          {collections.slice(0, 12).map((c) => {
+            const collMovies = c.movieIds
+              .map((id) => moviesById.get(id))
+              .filter((m): m is NonNullable<typeof m> => Boolean(m))
+            return (
+              <CollectionCard
+                key={c.id}
                 title={c.title}
-                coverUrl={c.coverUrl}
                 year={c.year}
-                badge={`${c.movieIds.length} films`}
-                aspect="portrait"
+                coverUrl={c.coverUrl}
                 enrichmentKey={`collection:${c.id}`}
+                movieIds={c.movieIds}
+                movies={collMovies}
                 onClick={() => openDetail({ kind: 'collection', id: c.id })}
                 onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
               />
-            </div>
-          ))}
+            )
+          })}
         </Rail>
       )}
 
@@ -796,19 +800,24 @@ export function CollectionsView() {
         )}
       </div>
       <NetflixRail title={`Collections (${filtered.length})`}>
-        {filtered.map((c) => (
-          <NetflixCard
-            key={c.id}
-            title={c.title}
-            year={c.year}
-            coverUrl={c.coverUrl}
-            kind="collection"
-            enrichmentKey={`collection:${c.id}`}
-            badge={`${c.movieIds.length} films`}
-            onClick={() => openDetail({ kind: 'collection', id: c.id })}
-            onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
-          />
-        ))}
+        {filtered.map((c) => {
+          const collMovies = c.movieIds
+            .map((id) => moviesById.get(id))
+            .filter((m): m is NonNullable<typeof m> => Boolean(m))
+          return (
+            <CollectionCard
+              key={c.id}
+              title={c.title}
+              year={c.year}
+              coverUrl={c.coverUrl}
+              enrichmentKey={`collection:${c.id}`}
+              movieIds={c.movieIds}
+              movies={collMovies}
+              onClick={() => openDetail({ kind: 'collection', id: c.id })}
+              onPlay={() => playQueue(buildCollectionQueue(c, moviesById))}
+            />
+          )
+        })}
       </NetflixRail>
       {managerOpen && (
         <CollectionManager
