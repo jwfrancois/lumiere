@@ -38,6 +38,7 @@ import {
   buildCollectionQueue,
 } from '@/lib/categorize'
 import { CollectionManager } from './collection-manager'
+import { CastBrowser } from './cast-browser'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -249,6 +250,13 @@ export function DetailDrawer() {
           </div>
         )}
 
+        {/* Cast with photos + filmography (Roon/IMDb-style) */}
+        <CastBrowser
+          castString={enrich?.cast}
+          currentItemId={movie.id}
+          context="movie"
+        />
+
         <div className="rounded-lg bg-muted/40 border border-border/40 p-3 text-xs">
           <div className="font-medium mb-1">File</div>
           <div className="font-mono text-[11px] text-muted-foreground break-all">
@@ -412,8 +420,12 @@ export function DetailDrawer() {
   } else if (detailItem.kind === 'tv') {
     const show = tvShows.find((s) => s.id === detailItem.id)
     if (!show) return null
+    const enrich = useLibrary.getState().enrichment[`tv:${show.id}`]
     title = show.title
-    description = show.description || `${show.totalEpisodes} episodes across ${Object.keys(show.seasons).length} season${Object.keys(show.seasons).length > 1 ? 's' : ''}`
+    description =
+      enrich?.plot ||
+      show.description ||
+      `${show.totalEpisodes} episodes across ${Object.keys(show.seasons).length} season${Object.keys(show.seasons).length > 1 ? 's' : ''}`
     const seasons = Object.keys(show.seasons).map(Number).sort((a, b) => a - b)
     content = (
       <div className="space-y-4">
@@ -432,6 +444,67 @@ export function DetailDrawer() {
           </Button>
         </div>
 
+        {/* Ratings row — IMDb / RT / Metacritic */}
+        {(enrich?.imdbRating !== undefined ||
+          enrich?.rottenTomatoes !== undefined ||
+          enrich?.metacritic !== undefined) && (
+          <div className="flex gap-2">
+            {enrich?.imdbRating !== undefined && (
+              <RatingPill label="IMDb" value={enrich.imdbRating.toFixed(1)} color="amber" />
+            )}
+            {enrich?.rottenTomatoes !== undefined && (
+              <RatingPill label="RT" value={`${enrich.rottenTomatoes}%`} color="rose" />
+            )}
+            {enrich?.metacritic !== undefined && (
+              <RatingPill label="Metacritic" value={String(enrich.metacritic)} color="emerald" />
+            )}
+          </div>
+        )}
+
+        {/* Metadata row */}
+        <DetailMeta
+          rows={[
+            (enrich?.year || show.year) && { icon: Calendar, label: 'Year', value: String(enrich?.year || show.year) },
+            enrich?.runtime && { icon: Clock, label: 'Runtime', value: enrich.runtime },
+            (enrich?.genre || show.genre) && { icon: Star, label: 'Genre', value: enrich?.genre || show.genre || '' },
+            enrich?.rated && enrich.rated !== 'N/A' && { icon: Tv, label: 'Rated', value: enrich.rated },
+            enrich?.totalSeasons && { icon: Layers, label: 'Seasons', value: String(enrich.totalSeasons) },
+            { icon: Tv, label: 'Episodes', value: String(show.totalEpisodes) },
+            enrich?.director && { icon: User, label: 'Creator', value: enrich.director },
+          ].filter(Boolean) as { icon: typeof Calendar; label: string; value: string }[]}
+        />
+
+        {/* Synopsis */}
+        {(enrich?.plot || description) && (
+          <div>
+            <h4 className="text-sm font-semibold mb-2 text-amber-300/90">Synopsis</h4>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {enrich?.plot || description}
+            </p>
+          </div>
+        )}
+
+        {/* Awards */}
+        {enrich?.awards && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+            <Star className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium">
+                Awards
+              </div>
+              <div className="text-xs text-foreground">{enrich.awards}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Cast with photos + filmography */}
+        <CastBrowser
+          castString={enrich?.cast}
+          currentItemId={show.id}
+          context="tv"
+        />
+
+        {/* Seasons + Episodes */}
         {seasons.map((s) => (
           <div key={s}>
             <h4 className="text-sm font-semibold mb-2 text-amber-300/90 flex items-center gap-2">
