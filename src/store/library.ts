@@ -23,6 +23,7 @@ import {
 import {
   saveLibrary,
   loadLibrary,
+  loadLibraryAsync,
   clearLibrary,
   saveEnrichment,
   loadEnrichment,
@@ -239,7 +240,23 @@ function schedulePersist() {
 function applyPersistedData() {
   const persisted = loadLibrary()
   if (!persisted) return
+  applyPersistedDataFromObj(persisted)
+}
 
+/** Shared logic for applying persisted data to the store. */
+function applyPersistedDataFromObj(persisted: {
+  scannedFolders: ScannedFolderInfo[]
+  fileManifest: Array<{
+    id: string
+    name: string
+    path: string
+    kind: import('../lib/media-scanner').MediaKind
+    size: number
+    folderId?: string
+  }>
+  rawMetadata: Record<string, Omit<MediaMetadata, 'coverUrl'>>
+  currentView: string
+}) {
   // Restore files in "unavailable" mode — UI shows posters + ratings,
   // playback is blocked until the user reconnects folders.
   const files = manifestToUnavailableFiles(persisted.fileManifest)
@@ -260,8 +277,6 @@ function applyPersistedData() {
   }))
   const result = categorizeFiles(input)
 
-  // Enrichment is NOT in persisted (it's in IndexedDB now).
-  // It will be loaded async in hydrateFromStorage().
   useLibrary.setState({
     scannedFiles: files,
     rawMetadata,
@@ -453,41 +468,34 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   /* ----------------------- persistence + reconnect ----------------------- */
 
   hydrateFromStorage: () => {
-    // Only run on client — loadLibrary() returns null on server.
+    // Try synchronous load first (handles legacy localStorage migration)
     applyPersistedData()
 
-    // Integrity check: if no library data was loaded but backups exist,
-    // log a warning so the user knows data may have been lost.
-    if (
-      get().scannedFiles.length === 0 &&
-      typeof window !== 'undefined'
-    ) {
-      const hasBackup =
-        localStorage.getItem('lumiere:library:v2:bak1') ||
-        localStorage.getItem('lumiere:library:v2:bak2') ||
-        localStorage.getItem('lumiere:library:v2:bak3') ||
-        localStorage.getItem('lumiere:library:v2:prev') ||
-        localStorage.getItem('lumiere:library:v1')
-      if (hasBackup) {
-        console.warn(
-          '[store] No primary library data found, but backups exist. ' +
-            'The loadLibrary() function should have recovered from backups. ' +
-            'If you see this message, check browser console for details.'
-        )
-      }
+    // If no data was loaded synchronously, try async IndexedDB load
+    if (get().scannedFiles.length === 0) {
+      void loadLibraryAsync().then((persisted) => {
+        if (!persisted) return
+        applyPersistedDataFromObj(persisted)
+        // Load enrichment from IndexedDB
+        void loadEnrichment().then((enrich) => {
+          if (enrich && Object.keys(enrich).length > 0) {
+            set({ enrichment: enrich })
+          }
+        })
+      })
+    } else {
+      // Data was loaded from legacy localStorage — still load enrichment from IDB
+      void loadEnrichment().then((enrich) => {
+        if (enrich && Object.keys(enrich).length > 0) {
+          set({ enrichment: enrich })
+        }
+      })
     }
 
     // Load listening history + tags from localStorage.
     set({
       listeningHistory: loadHistory(),
       tagState: loadTags(),
-    })
-    // Load enrichment from IndexedDB (async — the UI will update when
-    // it resolves; enrichment data appears progressively after reload).
-    void loadEnrichment().then((enrich) => {
-      if (enrich && Object.keys(enrich).length > 0) {
-        set({ enrichment: enrich })
-      }
     })
   },
 

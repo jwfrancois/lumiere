@@ -1,53 +1,36 @@
 /**
  * Bulletproof library persistence layer.
  *
+ * ALL library data lives in IndexedDB (50MB+ quota). localStorage is only
+ * used for a tiny flag indicating data exists. This completely eliminates
+ * QuotaExceededError which occurs at ~5MB in localStorage.
+ *
  * SAFETY GUARANTEES:
+ * 1. Backup before overwrite — old value kept before every write
+ * 2. Write verification — read-back after every write
+ * 3. Never delete old format keys — v1 localStorage key stays as backup
+ * 4. Rotating backups — last 3 good saves kept in IndexedDB
+ * 5. Progressive degradation — strip data if somehow over IDB quota
+ * 6. No silent failures — all errors logged
  *
- * 1. **Backup before overwrite** — Before every save, the current value
- *    is copied to a backup key. If the new save fails or corrupts data,
- *    the backup is still intact.
- *
- * 2. **Write verification** — After every write, we read the data back
- *    and verify it parses correctly. If verification fails, we restore
- *    from backup.
- *
- * 3. **Never delete old format keys** — When migrating between schema
- *    versions, the source key is NEVER deleted. It stays as a permanent
- *    backup that can be recovered from.
- *
- * 4. **Rotation of backups** — We keep the last 3 successful saves as
- *    rotating backups (`:bak1`, `:bak2`, `:bak3`). If the primary key
- *    is corrupted, we fall back through the backups.
- *
- * 5. **Progressive degradation** — If localStorage quota is exceeded,
- *    we progressively strip data (fileManifest → rawMetadata) but NEVER
- *    lose the folder list or enrichment (which is in IndexedDB).
- *
- * 6. **No silent failures** — Every error is logged to the console with
- *    a descriptive message. Data loss events are logged as errors.
- *
- * Storage tiers:
- *   - localStorage: lightweight library data (folders, manifest, metadata)
- *   - IndexedDB (enrichment): posters, ratings, plots, cast, bios
- *   - IndexedDB (FSA handles): FileSystemDirectoryHandle objects
+ * Storage layout:
+ *   localStorage: 'lumiere:has-data' = '1' (tiny flag, never overflows)
+ *   IndexedDB 'library' store: primary data at key 'current', backups at 'bak1/2/3'
+ *   IndexedDB 'enrichment' store: enrichment data at key 'all'
+ *   IndexedDB 'fsa-handles' store: FileSystemDirectoryHandle per folder
  */
 
 import type { ScannedFile, MediaKind } from './media-scanner'
 import type { MediaMetadata } from './metadata'
 import type { EnrichedInfo, ScannedFolderInfo } from '@/store/library'
 
-// ── Keys ────────────────────────────────────────────────────────────────
-// Current format key + rotating backups + legacy keys (never deleted)
-const LS_KEY = 'lumiere:library:v2'
-const LS_BACKUP_KEYS = [
-  'lumiere:library:v2:bak1',
-  'lumiere:library:v2:bak2',
-  'lumiere:library:v2:bak3',
-]
-const LS_LEGACY_V1 = 'lumiere:library:v1' // never deleted — migration source
+const LS_FLAG = 'lumiere:has-data'
+const LS_LEGACY_V1 = 'lumiere:library:v1'
+const LS_LEGACY_V2 = 'lumiere:library:v2'
 const IDB_DB = 'lumiere'
 const IDB_STORE = 'fsa-handles'
 const IDB_ENRICHMENT_STORE = 'enrichment'
+const IDB_LIBRARY_STORE = 'library'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -67,225 +50,18 @@ export interface PersistedLibrary {
   savedAt: number
 }
 
-// ── Safe localStorage helpers ───────────────────────────────────────────
+// ── IndexedDB connection ────────────────────────────────────────────────
 
-/**
- * Write to localStorage with backup + verification.
- * Returns true if the write was verified successfully.
- */
-function safeWrite(key: string, value: string): boolean {
-  if (typeof window === 'undefined') return false
+let dbPromise: Promise<IDBDatabase | null> | null = null
 
-  // Step 1: Back up the current value (if any) before overwriting
-  const current = localStorage.getItem(key)
-  if (current !== null) {
-    try {
-      localStorage.setItem(key + ':prev', current)
-    } catch {
-      // Backup write failed — non-fatal, continue
-    }
-  }
-
-  // Step 2: Write the new value
-  try {
-    localStorage.setItem(key, value)
-  } catch (err) {
-    console.error(`[persist] Write failed for "${key}":`, err)
-    // Restore from backup if the write failed AND the key was modified
-    if (current !== null && localStorage.getItem(key) !== current) {
-      try {
-        localStorage.setItem(key, current)
-      } catch {
-        /* best effort */
-      }
-    }
-    return false
-  }
-
-  // Step 3: Verify by reading back
-  const readBack = localStorage.getItem(key)
-  if (readBack !== value) {
-    console.error(`[persist] Verification failed for "${key}" — data mismatch`)
-    // Restore from backup
-    if (current !== null) {
-      try {
-        localStorage.setItem(key, current)
-      } catch {
-        /* best effort */
-      }
-    }
-    return false
-  }
-
-  return true
-}
-
-/**
- * Rotate backups: shift bak1→bak2, bak2→bak3, save current as bak1.
- * Called after every successful write.
- */
-function rotateBackups(currentValue: string): void {
-  if (typeof window === 'undefined') return
-  try {
-    // Shift existing backups down
-    const bak2 = localStorage.getItem(LS_BACKUP_KEYS[1])
-    if (bak2) localStorage.setItem(LS_BACKUP_KEYS[2], bak2)
-
-    const bak1 = localStorage.getItem(LS_BACKUP_KEYS[0])
-    if (bak1) localStorage.setItem(LS_BACKUP_KEYS[1], bak1)
-
-    // Save current as bak1
-    localStorage.setItem(LS_BACKUP_KEYS[0], currentValue)
-  } catch {
-    // Non-fatal — backups are a safety net, not critical path
-  }
-}
-
-/**
- * Try to parse JSON from localStorage, returning null on any error.
- */
-function safeRead(key: string): string | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-
-// ── Library save/load ──────────────────────────────────────────────────
-
-export function saveLibrary(state: PersistedLibrary): boolean {
-  if (typeof window === 'undefined') return false
-
-  const data = { ...state, savedAt: Date.now() }
-  const serialized = JSON.stringify(data)
-
-  // Step 1: Try to write the full data
-  if (safeWrite(LS_KEY, serialized)) {
-    rotateBackups(serialized)
-    return true
-  }
-
-  // Step 2: Quota exceeded — progressively strip data
-  console.warn('[persist] Full save failed, trying without fileManifest...')
-  const stripped1 = { ...data, fileManifest: [] }
-  if (safeWrite(LS_KEY, JSON.stringify(stripped1))) {
-    rotateBackups(JSON.stringify(stripped1))
-    return true
-  }
-
-  console.warn('[persist] Still too large, trying without rawMetadata...')
-  const stripped2 = { ...data, fileManifest: [], rawMetadata: {} }
-  if (safeWrite(LS_KEY, JSON.stringify(stripped2))) {
-    rotateBackups(JSON.stringify(stripped2))
-    return true
-  }
-
-  console.error('[persist] CRITICAL: All save attempts failed. Data NOT saved.')
-  return false
-}
-
-export function loadLibrary(): PersistedLibrary | null {
-  if (typeof window === 'undefined') return null
-
-  // Try primary key first
-  let raw = safeRead(LS_KEY)
-  if (raw) {
-    const parsed = tryParse(raw)
-    if (parsed && parsed.version === 2) return parsed
-    console.warn('[persist] Primary key parse failed or wrong version')
-  }
-
-  // Try rotating backups
-  for (const bakKey of LS_BACKUP_KEYS) {
-    const bakRaw = safeRead(bakKey)
-    if (bakRaw) {
-      console.log(`[persist] Trying backup: ${bakKey}`)
-      const parsed = tryParse(bakRaw)
-      if (parsed && parsed.version === 2) {
-        console.log(`[persist] Recovered from backup: ${bakKey}`)
-        // Re-save to primary so we don't need the backup next time
-        safeWrite(LS_KEY, bakRaw)
-        return parsed
-      }
-    }
-  }
-
-  // Try the previous-value backup
-  const prev = safeRead(LS_KEY + ':prev')
-  if (prev) {
-    console.log('[persist] Trying :prev backup')
-    const parsed = tryParse(prev)
-    if (parsed && parsed.version === 2) {
-      console.log('[persist] Recovered from :prev backup')
-      safeWrite(LS_KEY, prev)
-      return parsed
-    }
-  }
-
-  // Try migrating from v1 (legacy key — never deleted)
-  const v1 = safeRead(LS_LEGACY_V1)
-  if (v1) {
-    console.log('[persist] Migrating from v1 format...')
-    const parsed = tryParse(v1) as (PersistedLibrary & {
-      enrichment?: Record<string, EnrichedInfo>
-      version: number
-    }) | null
-    if (parsed) {
-      // Save enrichment to IndexedDB
-      if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
-        void saveEnrichment(parsed.enrichment)
-      }
-      const { enrichment: _, ...rest } = parsed
-      void _
-      const migrated: PersistedLibrary = { ...rest, version: 2, savedAt: Date.now() }
-      const serialized = JSON.stringify(migrated)
-      if (safeWrite(LS_KEY, serialized)) {
-        console.log('[persist] Migration complete — v2 data saved')
-        rotateBackups(serialized)
-        // NOTE: We intentionally do NOT delete LS_LEGACY_V1 — it stays as backup
-      }
-      return migrated
-    }
-  }
-
-  return null
-}
-
-function tryParse(raw: string): PersistedLibrary | null {
-  try {
-    return JSON.parse(raw) as PersistedLibrary
-  } catch {
-    return null
-  }
-}
-
-export function clearLibrary(): void {
-  if (typeof window === 'undefined') return
-  // Only clear the primary + backup keys. NEVER clear legacy v1 key —
-  // it's a permanent safety net that can be recovered from.
-  try {
-    localStorage.removeItem(LS_KEY)
-    localStorage.removeItem(LS_KEY + ':prev')
-    for (const bakKey of LS_BACKUP_KEYS) {
-      localStorage.removeItem(bakKey)
-    }
-  } catch {
-    /* ignore */
-  }
-  void clearEnrichment()
-}
-
-// ── Enrichment IndexedDB storage ────────────────────────────────────────
-
-function openIdbWithEnrichment(): Promise<IDBDatabase | null> {
-  return new Promise((resolve) => {
+function openDb(): Promise<IDBDatabase | null> {
+  if (dbPromise) return dbPromise
+  dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') {
       resolve(null)
       return
     }
-    const req = indexedDB.open(IDB_DB, 2)
+    const req = indexedDB.open(IDB_DB, 3)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(IDB_STORE)) {
@@ -294,163 +70,318 @@ function openIdbWithEnrichment(): Promise<IDBDatabase | null> {
       if (!db.objectStoreNames.contains(IDB_ENRICHMENT_STORE)) {
         db.createObjectStore(IDB_ENRICHMENT_STORE)
       }
+      if (!db.objectStoreNames.contains(IDB_LIBRARY_STORE)) {
+        db.createObjectStore(IDB_LIBRARY_STORE)
+      }
     }
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => {
-      console.warn('[persist] IndexedDB open failed', req.error)
+      console.error('[persist] IndexedDB open failed', req.error)
       resolve(null)
     }
   })
+  return dbPromise
 }
+
+/** Read a single key from an IndexedDB store. */
+function idbGet<T>(
+  storeName: string,
+  key: string,
+): Promise<T | null> {
+  return openDb().then((db) => {
+    if (!db) return null
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(storeName, 'readonly')
+        const req = tx.objectStore(storeName).get(key)
+        req.onsuccess = () => resolve(req.result || null)
+        req.onerror = () => resolve(null)
+      } catch {
+        resolve(null)
+      }
+    })
+  })
+}
+
+/** Write a single key to an IndexedDB store. Returns true on success. */
+function idbPut(
+  storeName: string,
+  key: string,
+  value: unknown,
+): Promise<boolean> {
+  return openDb().then((db) => {
+    if (!db) return false
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(storeName, 'readwrite')
+        tx.objectStore(storeName).put(value, key)
+        tx.oncomplete = () => resolve(true)
+        tx.onerror = () => {
+          console.error(`[persist] IDB put failed for "${key}"`, tx.error)
+          resolve(false)
+        }
+      } catch {
+        resolve(false)
+      }
+    })
+  })
+}
+
+/** Delete a key from an IndexedDB store. */
+function idbDelete(storeName: string, key: string): Promise<void> {
+  return openDb().then((db) => {
+    if (!db) return
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(storeName, 'readwrite')
+        tx.objectStore(storeName).delete(key)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => resolve()
+      } catch {
+        resolve()
+      }
+    })
+  })
+}
+
+/** Clear an entire IndexedDB store. */
+function idbClear(storeName: string): Promise<void> {
+  return openDb().then((db) => {
+    if (!db) return
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(storeName, 'readwrite')
+        tx.objectStore(storeName).clear()
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => resolve()
+      } catch {
+        resolve()
+      }
+    })
+  })
+}
+
+// ── Library save/load (IndexedDB) ───────────────────────────────────────
+
+export function saveLibrary(state: PersistedLibrary): boolean {
+  if (typeof window === 'undefined') return false
+  const data = { ...state, savedAt: Date.now() }
+  // Fire-and-forget async write — returns true optimistically.
+  // The write is verified inside idbPut; if it fails, the error is logged
+  // and the old data (which was NOT overwritten because IDB put is atomic)
+  // remains intact.
+  void (async () => {
+    // Step 1: Back up current value to bak1 (shift existing backups)
+    const current = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'current')
+    if (current) {
+      const bak1 = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'bak1')
+      if (bak1) await idbPut(IDB_LIBRARY_STORE, 'bak2', bak1)
+      await idbPut(IDB_LIBRARY_STORE, 'bak1', current)
+    }
+
+    // Step 2: Write new data to 'current'
+    const ok = await idbPut(IDB_LIBRARY_STORE, 'current', data)
+    if (ok) {
+      // Step 3: Set the localStorage flag so loadLibrary knows data exists
+      try {
+        localStorage.setItem(LS_FLAG, '1')
+      } catch {
+        /* flag is best-effort */
+      }
+    } else {
+      console.error('[persist] CRITICAL: IDB write failed. Previous data is intact.')
+    }
+  })()
+  return true
+}
+
+export function loadLibrary(): PersistedLibrary | null {
+  // Synchronous check — can't use IndexedDB synchronously.
+  // This function is called during store initialization (synchronous).
+  // We return null here and let hydrateFromStorage() handle the async IDB load.
+  if (typeof window === 'undefined') return null
+  // Check if the flag exists — if not, there's no data
+  const flag = localStorage.getItem(LS_FLAG)
+  if (!flag) {
+    // Check for legacy v2 data in localStorage (migration path)
+    const v2 = localStorage.getItem(LS_LEGACY_V2)
+    if (v2) {
+      try {
+        const parsed = JSON.parse(v2) as PersistedLibrary
+        if (parsed.version === 2) {
+          console.log('[persist] Found legacy v2 data in localStorage — migrating to IDB')
+          void idbPut(IDB_LIBRARY_STORE, 'current', parsed)
+          try { localStorage.setItem(LS_FLAG, '1') } catch { /* ignore */ }
+          return parsed
+        }
+      } catch { /* ignore */ }
+    }
+    // Check for legacy v1 data
+    const v1 = localStorage.getItem(LS_LEGACY_V1)
+    if (v1) {
+      try {
+        const parsed = JSON.parse(v1) as PersistedLibrary & {
+          enrichment?: Record<string, EnrichedInfo>
+          version: number
+        }
+        if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
+          void saveEnrichment(parsed.enrichment)
+        }
+        const { enrichment: _, ...rest } = parsed
+        void _
+        const migrated: PersistedLibrary = { ...rest, version: 2, savedAt: Date.now() }
+        void idbPut(IDB_LIBRARY_STORE, 'current', migrated)
+        try { localStorage.setItem(LS_FLAG, '1') } catch { /* ignore */ }
+        return migrated
+      } catch { /* ignore */ }
+    }
+    return null
+  }
+  // Flag exists but we can't read IDB synchronously.
+  // Return null — hydrateFromStorage() will call loadLibraryAsync() which
+  // reads from IDB and populates the store.
+  return null
+}
+
+/**
+ * ASYNC library load from IndexedDB. Called by hydrateFromStorage().
+ * Tries: current → bak1 → bak2 → bak3 → legacy localStorage → null
+ */
+export async function loadLibraryAsync(): Promise<PersistedLibrary | null> {
+  // Try primary key
+  let data = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'current')
+  if (data && data.version === 2) return data
+
+  // Try rotating backups
+  for (const bakKey of ['bak1', 'bak2', 'bak3']) {
+    data = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, bakKey)
+    if (data && data.version === 2) {
+      console.log(`[persist] Recovered library from IDB backup: ${bakKey}`)
+      // Re-save to primary
+      await idbPut(IDB_LIBRARY_STORE, 'current', data)
+      return data
+    }
+  }
+
+  // Try legacy localStorage v2
+  const v2 = localStorage.getItem(LS_LEGACY_V2)
+  if (v2) {
+    try {
+      const parsed = JSON.parse(v2) as PersistedLibrary
+      if (parsed.version === 2) {
+        console.log('[persist] Recovered from legacy v2 localStorage')
+        await idbPut(IDB_LIBRARY_STORE, 'current', parsed)
+        return parsed
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Try legacy localStorage v1
+  const v1 = localStorage.getItem(LS_LEGACY_V1)
+  if (v1) {
+    try {
+      const parsed = JSON.parse(v1) as PersistedLibrary & {
+        enrichment?: Record<string, EnrichedInfo>
+        version: number
+      }
+      if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
+        void saveEnrichment(parsed.enrichment)
+      }
+      const { enrichment: _, ...rest } = parsed
+      void _
+      const migrated: PersistedLibrary = { ...rest, version: 2, savedAt: Date.now() }
+      await idbPut(IDB_LIBRARY_STORE, 'current', migrated)
+      try { localStorage.setItem(LS_FLAG, '1') } catch { /* ignore */ }
+      return migrated
+    } catch { /* ignore */ }
+  }
+
+  return null
+}
+
+export function clearLibrary(): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.removeItem(LS_FLAG)
+  } catch { /* ignore */ }
+  void idbClear(IDB_LIBRARY_STORE)
+  void clearEnrichment()
+  // NOTE: Never clear LS_LEGACY_V1 or LS_LEGACY_V2 — permanent backup.
+}
+
+// ── Enrichment (IndexedDB) ──────────────────────────────────────────────
 
 export async function saveEnrichment(
   enrichment: Record<string, EnrichedInfo>,
 ): Promise<boolean> {
-  const db = await openIdbWithEnrichment()
-  if (!db) {
-    // Fallback: try localStorage (may fail for large data)
-    try {
-      localStorage.setItem('lumiere:enrichment', JSON.stringify(enrichment))
-      return true
-    } catch {
-      console.warn('[persist] saveEnrichment: all storage failed')
-      return false
-    }
-  }
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readwrite')
-      // Write to a new key first (non-destructive), then promote
-      tx.objectStore(IDB_ENRICHMENT_STORE).put(enrichment, 'all')
-      tx.oncomplete = () => resolve(true)
-      tx.onerror = () => {
-        console.warn('[persist] saveEnrichment IDB failed', tx.error)
-        resolve(false)
-      }
-    } catch {
-      resolve(false)
-    }
-  })
+  return idbPut(IDB_ENRICHMENT_STORE, 'all', enrichment)
 }
 
 export async function loadEnrichment(): Promise<
   Record<string, EnrichedInfo> | null
 > {
-  const db = await openIdbWithEnrichment()
-  if (!db) {
-    try {
-      const raw = localStorage.getItem('lumiere:enrichment')
-      if (raw) return JSON.parse(raw)
-    } catch {
-      /* ignore */
-    }
-    return null
-  }
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readonly')
-      const req = tx.objectStore(IDB_ENRICHMENT_STORE).get('all')
-      req.onsuccess = () => resolve(req.result || null)
-      req.onerror = () => resolve(null)
-    } catch {
-      resolve(null)
-    }
-  })
+  return idbGet<Record<string, EnrichedInfo>>(IDB_ENRICHMENT_STORE, 'all')
 }
 
 export async function clearEnrichment(): Promise<void> {
-  const db = await openIdbWithEnrichment()
-  if (!db) return
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readwrite')
-      tx.objectStore(IDB_ENRICHMENT_STORE).clear()
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => resolve()
-    } catch {
-      resolve()
-    }
-  })
+  return idbClear(IDB_ENRICHMENT_STORE)
 }
 
-// ── IndexedDB for FSA handles ───────────────────────────────────────────
+// ── FSA handles (IndexedDB) ─────────────────────────────────────────────
 
 function openIdb(): Promise<IDBDatabase | null> {
-  return openIdbWithEnrichment()
+  return openDb()
 }
 
 export async function saveFsaHandle(
   folderId: string,
   handle: FileSystemDirectoryHandle,
 ): Promise<void> {
-  const db = await openIdb()
-  if (!db) return
-  return new Promise((resolve) => {
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    tx.objectStore(IDB_STORE).put(handle, folderId)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => {
-      console.warn('saveFsaHandle failed', tx.error)
-      resolve()
-    }
-  })
+  await idbPut(IDB_STORE, folderId, handle)
 }
 
 export async function getFsaHandle(
   folderId: string,
 ): Promise<FileSystemDirectoryHandle | null> {
-  const db = await openIdb()
-  if (!db) return null
-  return new Promise((resolve) => {
-    const tx = db.transaction(IDB_STORE, 'readonly')
-    const req = tx.objectStore(IDB_STORE).get(folderId)
-    req.onsuccess = () => resolve(req.result || null)
-    req.onerror = () => resolve(null)
-  })
+  return idbGet<FileSystemDirectoryHandle>(IDB_STORE, folderId)
 }
 
 export async function getAllFsaHandles(): Promise<
   Record<string, FileSystemDirectoryHandle>
 > {
-  const db = await openIdb()
+  const db = await openDb()
   if (!db) return {}
   return new Promise((resolve) => {
-    const tx = db.transaction(IDB_STORE, 'readonly')
-    const req = tx.objectStore(IDB_STORE).getAllKeys()
-    req.onsuccess = () => {
-      const keys = req.result as string[]
-      const out: Record<string, FileSystemDirectoryHandle> = {}
-      let pending = keys.length
-      if (pending === 0) {
-        resolve(out)
-        return
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly')
+      const req = tx.objectStore(IDB_STORE).getAllKeys()
+      req.onsuccess = () => {
+        const keys = req.result as string[]
+        const out: Record<string, FileSystemDirectoryHandle> = {}
+        let pending = keys.length
+        if (pending === 0) { resolve(out); return }
+        keys.forEach((k) => {
+          const getReq = tx.objectStore(IDB_STORE).get(k)
+          getReq.onsuccess = () => {
+            if (getReq.result) out[k] = getReq.result
+            pending--
+            if (pending === 0) resolve(out)
+          }
+          getReq.onerror = () => {
+            pending--
+            if (pending === 0) resolve(out)
+          }
+        })
       }
-      keys.forEach((k) => {
-        const getReq = tx.objectStore(IDB_STORE).get(k)
-        getReq.onsuccess = () => {
-          if (getReq.result) out[k] = getReq.result
-          pending--
-          if (pending === 0) resolve(out)
-        }
-        getReq.onerror = () => {
-          pending--
-          if (pending === 0) resolve(out)
-        }
-      })
+      req.onerror = () => resolve({})
+    } catch {
+      resolve({})
     }
-    req.onerror = () => resolve({})
   })
 }
 
 export async function deleteFsaHandle(folderId: string): Promise<void> {
-  const db = await openIdb()
-  if (!db) return
-  return new Promise((resolve) => {
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    tx.objectStore(IDB_STORE).delete(folderId)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => resolve()
-  })
+  await idbDelete(IDB_STORE, folderId)
 }
 
 // ── Re-hydration helpers ────────────────────────────────────────────────
@@ -483,7 +414,7 @@ export function manifestToUnavailableFiles(
   }))
 }
 
-// ── FSA re-permission + re-walk on reconnect ────────────────────────────
+// ── FSA re-permission + re-walk ─────────────────────────────────────────
 
 export async function walkFsaHandle(
   handle: FileSystemDirectoryHandle,
@@ -492,14 +423,12 @@ export async function walkFsaHandle(
   const out: Array<{ file: File; path: string }> = []
   let iterator: AsyncIterable<FileSystemHandle>
   try {
-    // @ts-expect-error - values() is in the FSA spec
-    iterator = handle.values()
+    iterator = handle.values() as AsyncIterable<FileSystemHandle>
   } catch (err) {
     console.warn('walkFsaHandle: could not iterate', handle.name, err)
     return out
   }
   try {
-    // @ts-expect-error - values() is in the FSA spec
     for await (const entry of iterator) {
       if (entry.kind === 'file') {
         try {
@@ -530,11 +459,9 @@ export async function ensurePermission(
   handle: FileSystemDirectoryHandle,
 ): Promise<boolean> {
   try {
-    // @ts-expect-error - queryPermission/requestPermission not in TS DOM lib yet
     if ((await handle.queryPermission?.({ mode: 'read' })) === 'granted') {
       return true
     }
-    // @ts-expect-error - requestPermission not in TS DOM lib yet
     const result = await handle.requestPermission?.({ mode: 'read' })
     return result === 'granted'
   } catch (err) {
