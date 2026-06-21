@@ -41,6 +41,7 @@ import {
   CollectionsEmptyState,
 } from './collection-manager'
 import { CollectionCard } from './collection-card'
+import { FocusFilter } from './focus-filter'
 
 /* ----------------------------------------------------------------
  * Home view — keeps the original dashboard style
@@ -992,7 +993,13 @@ export function MusicView() {
   const playQueue = useLibrary((s) => s.playQueue)
   const queue = useLibrary((s) => s.queue)
   const currentIndex = useLibrary((s) => s.currentIndex)
+  const listeningHistory = useLibrary((s) => s.listeningHistory)
+  const tagState = useLibrary((s) => s.tagState)
   const [query, setQuery] = useState('')
+  const [browseMode, setBrowseMode] = useState<
+    'albums' | 'artists' | 'composers' | 'decades' | 'tags'
+  >('albums')
+  const [focusedIds, setFocusedIds] = useState<string[] | null>(null)
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
@@ -1007,8 +1014,29 @@ export function MusicView() {
     return [...list].sort((a, b) => a.artist.localeCompare(b.artist))
   }, [albums, query])
 
-  // Recently played (mock — first 6 albums)
-  const recent = filtered.slice(0, 6)
+  // Apply Focus filter if active
+  const displayAlbums = useMemo(() => {
+    if (focusedIds === null) return filtered
+    return filtered.filter((a) => focusedIds.includes(a.id))
+  }, [filtered, focusedIds])
+
+  // Recently played — derived from listening history (Roon-style)
+  const recentAlbums = useMemo(() => {
+    const albumPlayTimes = new Map<string, number>()
+    for (const a of albums) {
+      let latest = 0
+      for (const t of a.tracks) {
+        const stats = listeningHistory.tracks[t.id]
+        if (stats && stats.lastPlayed > latest) latest = stats.lastPlayed
+      }
+      if (latest > 0) albumPlayTimes.set(a.id, latest)
+    }
+    return Array.from(albumPlayTimes.entries())
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 6)
+      .map(([id]) => albums.find((a) => a.id === id))
+      .filter((a): a is NonNullable<typeof a> => Boolean(a))
+  }, [albums, listeningHistory])
 
   // Currently playing album id
   const currentPlayingAlbumId = queue[currentIndex]?.metadata.album
@@ -1033,10 +1061,19 @@ export function MusicView() {
     new Set(albums.map((a) => a.artist)),
   ).slice(0, 6)
 
+  // Browse mode options
+  const browseModes = [
+    { id: 'albums' as const, label: 'Albums' },
+    { id: 'artists' as const, label: 'Artists' },
+    { id: 'composers' as const, label: 'Composers' },
+    { id: 'decades' as const, label: 'Decades' },
+    { id: 'tags' as const, label: 'Tags' },
+  ]
+
   return (
     <div className="pb-32">
       {/* Header */}
-      <div className="mb-6 px-6 md:px-8">
+      <div className="mb-4 px-6 md:px-8">
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[var(--accent)] to-emerald-700 flex items-center justify-center spotify-glow">
             <Music className="w-5 h-5 text-[var(--accent-foreground)]" />
@@ -1050,8 +1087,26 @@ export function MusicView() {
         </div>
       </div>
 
+      {/* Browse mode tabs */}
+      <div className="px-6 md:px-8 mb-4 flex items-center gap-2 overflow-x-auto rail-scroll">
+        {browseModes.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setBrowseMode(m.id)}
+            className={cn(
+              'genre-chip px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap',
+              browseMode === m.id
+                ? 'genre-chip-active'
+                : 'bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10',
+            )}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {/* Search */}
-      <div className="px-6 md:px-8 mb-6">
+      <div className="px-6 md:px-8 mb-4">
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
@@ -1063,59 +1118,82 @@ export function MusicView() {
         </div>
       </div>
 
-      {!query && (
+      {/* Roon-style Focus filter (only in Albums browse mode) */}
+      {browseMode === 'albums' && !query && (
+        <div className="px-6 md:px-8">
+          <FocusFilter
+            albumIds={albums.map((a) => a.id)}
+            onFilteredChange={(ids) => setFocusedIds(ids.length < albums.length ? ids : null)}
+          />
+        </div>
+      )}
+
+      {/* Browse mode content */}
+      {browseMode === 'albums' && (
         <>
-          {/* Quick pick tiles (artist shortcuts) */}
-          {artists.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 px-6 md:px-8 mb-8">
-              {artists.map((artist, i) => {
-                const artistAlbums = albums.filter((a) => a.artist === artist)
-                const firstAlbum = artistAlbums[0]
-                if (!firstAlbum) return null
-                return (
-                  <button
-                    key={artist}
-                    onClick={() => openDetail({ kind: 'album', id: firstAlbum.id })}
-                    className="flex items-center gap-3 rounded-md overflow-hidden bg-white/[0.04] hover:bg-white/[0.1] transition group"
-                  >
-                    <div className="w-14 h-14 shrink-0 overflow-hidden">
-                      <PosterArt
-                        coverUrl={firstAlbum.coverUrl}
-                        title={artist}
+          {!query && (
+            <>
+              {/* Recently played (Roon-style listening history) */}
+              {recentAlbums.length > 0 && (
+                <SpotifyRail title="Recently Played" subtitle="Your listening history">
+                  {recentAlbums.map((a) => (
+                    <div key={a.id} className="w-44 md:w-52 shrink-0">
+                      <SpotifyCard
+                        title={a.title}
+                        subtitle={a.artist}
+                        coverUrl={a.coverUrl}
                         kind="album"
-                        square
+                        badge={`${a.tracks.length} tracks`}
+                        onClick={() => openDetail({ kind: 'album', id: a.id })}
+                        onPlay={() => playQueue(buildAlbumQueue(a))}
+                        isPlaying={currentPlayingAlbumId === a.id}
                       />
                     </div>
-                    <span className="text-sm font-semibold truncate pr-3">{artist}</span>
-                  </button>
-                )
-              })}
-            </div>
+                  ))}
+                </SpotifyRail>
+              )}
+
+              {/* Quick pick tiles (artist shortcuts) */}
+              {artists.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 px-6 md:px-8 mb-8">
+                  {artists.map((artist) => {
+                    const artistAlbums = albums.filter((a) => a.artist === artist)
+                    const firstAlbum = artistAlbums[0]
+                    if (!firstAlbum) return null
+                    return (
+                      <button
+                        key={artist}
+                        onClick={() => openDetail({ kind: 'album', id: firstAlbum.id })}
+                        className="flex items-center gap-3 rounded-md overflow-hidden bg-white/[0.04] hover:bg-white/[0.1] transition group"
+                      >
+                        <div className="w-14 h-14 shrink-0 overflow-hidden">
+                          <PosterArt
+                            coverUrl={firstAlbum.coverUrl}
+                            title={artist}
+                            kind="album"
+                            square
+                          />
+                        </div>
+                        <span className="text-sm font-semibold truncate pr-3">{artist}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Good evening / Quick play row */}
-          <SpotifyRail title="Good evening" subtitle="Jump back in">
-            {recent.map((a) => (
-              <div key={a.id} className="w-44 md:w-52 shrink-0">
+          {/* All albums grid (with Focus filter applied) */}
+          <div className="px-6 md:px-8">
+            <h2 className="text-lg font-bold mb-4">
+              {query
+                ? `${displayAlbums.length} result${displayAlbums.length === 1 ? '' : 's'} for "${query}"`
+                : `${displayAlbums.length} album${displayAlbums.length === 1 ? '' : 's'}`}
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+              {displayAlbums.map((a) => (
                 <SpotifyCard
-                  title={a.title}
-                  subtitle={a.artist}
-                  coverUrl={a.coverUrl}
-                  kind="album"
-                  badge={`${a.tracks.length} tracks`}
-                  onClick={() => openDetail({ kind: 'album', id: a.id })}
-                  onPlay={() => playQueue(buildAlbumQueue(a))}
-                  isPlaying={currentPlayingAlbumId === a.id}
-                />
-              </div>
-            ))}
-          </SpotifyRail>
-
-          {/* All albums grid */}
-          <SpotifyRail title="Your Albums" subtitle={`${filtered.length} albums in your library`}>
-            {filtered.map((a) => (
-              <div key={a.id} className="w-44 md:w-52 shrink-0">
-                <SpotifyCard
+                  key={a.id}
                   title={a.title}
                   subtitle={a.artist}
                   coverUrl={a.coverUrl}
@@ -1125,34 +1203,238 @@ export function MusicView() {
                   onPlay={() => playQueue(buildAlbumQueue(a))}
                   isPlaying={currentPlayingAlbumId === a.id}
                 />
-              </div>
-            ))}
-          </SpotifyRail>
+              ))}
+            </div>
+          </div>
         </>
       )}
 
-      {/* Search results */}
-      {query && (
-        <div className="px-6 md:px-8">
-          <h2 className="text-lg font-bold mb-4">
-            {filtered.length} result{filtered.length === 1 ? '' : 's'} for "{query}"
-          </h2>
+      {/* Artists browse mode */}
+      {browseMode === 'artists' && (
+        <BrowseByArtist albums={displayAlbums} onAlbumClick={(id) => openDetail({ kind: 'album', id: id })} />
+      )}
+
+      {/* Composers browse mode */}
+      {browseMode === 'composers' && (
+        <BrowseByComposer albums={displayAlbums} onAlbumClick={(id) => openDetail({ kind: 'album', id: id })} />
+      )}
+
+      {/* Decades browse mode */}
+      {browseMode === 'decades' && (
+        <BrowseByDecade albums={displayAlbums} onAlbumClick={(id) => openDetail({ kind: 'album', id: id })} />
+      )}
+
+      {/* Tags browse mode */}
+      {browseMode === 'tags' && (
+        <BrowseByTags onAlbumClick={(id) => openDetail({ kind: 'album', id: id })} />
+      )}
+    </div>
+  )
+}
+
+/* ----------- Roon-style browse mode helpers ----------- */
+
+function BrowseByArtist({
+  albums,
+  onAlbumClick,
+}: {
+  albums: Array<{ id: string; title: string; artist: string; coverUrl?: string; year?: number; tracks: Array<{ id: string }> }>
+  onAlbumClick: (id: string) => void
+}) {
+  const byArtist = useMemo(() => {
+    const map = new Map<string, typeof albums>()
+    for (const a of albums) {
+      const list = map.get(a.artist) || []
+      list.push(a)
+      map.set(a.artist, list)
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [albums])
+
+  return (
+    <div className="px-6 md:px-8 space-y-6">
+      {byArtist.map(([artist, artistAlbums]) => (
+        <div key={artist}>
+          <div className="flex items-center gap-3 mb-3">
+            <h2 className="text-xl font-bold">{artist}</h2>
+            <span className="text-xs text-muted-foreground">
+              {artistAlbums.length} album{artistAlbums.length === 1 ? '' : 's'}
+            </span>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
-            {filtered.map((a) => (
+            {artistAlbums.map((a) => (
               <SpotifyCard
                 key={a.id}
                 title={a.title}
                 subtitle={a.artist}
                 coverUrl={a.coverUrl}
                 kind="album"
-                onClick={() => openDetail({ kind: 'album', id: a.id })}
-                onPlay={() => playQueue(buildAlbumQueue(a))}
-                isPlaying={currentPlayingAlbumId === a.id}
+                badge={a.year ? String(a.year) : undefined}
+                onClick={() => onAlbumClick(a.id)}
               />
             ))}
           </div>
         </div>
-      )}
+      ))}
+    </div>
+  )
+}
+
+function BrowseByComposer({
+  albums,
+  onAlbumClick,
+}: {
+  albums: Array<{ id: string; title: string; artist: string; coverUrl?: string; year?: number; tracks: Array<{ id: string; metadata: { composer?: string } }> }>
+  onAlbumClick: (id: string) => void
+}) {
+  const byComposer = useMemo(() => {
+    const map = new Map<string, typeof albums>()
+    for (const a of albums) {
+      for (const t of a.tracks) {
+        const c = t.metadata.composer
+        if (c) {
+          const list = map.get(c) || []
+          if (!list.includes(a)) list.push(a)
+          map.set(c, list)
+        }
+      }
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [albums])
+
+  if (byComposer.length === 0) {
+    return (
+      <div className="px-6 md:px-8 text-center py-12 text-sm text-muted-foreground">
+        No composer metadata found in your library.
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-6 md:px-8 space-y-6">
+      {byComposer.map(([composer, composerAlbums]) => (
+        <div key={composer}>
+          <div className="flex items-center gap-3 mb-3">
+            <h2 className="text-xl font-bold">{composer}</h2>
+            <span className="text-xs text-muted-foreground">
+              {composerAlbums.length} album{composerAlbums.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+            {composerAlbums.map((a) => (
+              <SpotifyCard
+                key={a.id}
+                title={a.title}
+                subtitle={a.artist}
+                coverUrl={a.coverUrl}
+                kind="album"
+                onClick={() => onAlbumClick(a.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BrowseByDecade({
+  albums,
+  onAlbumClick,
+}: {
+  albums: Array<{ id: string; title: string; artist: string; coverUrl?: string; year?: number }>
+  onAlbumClick: (id: string) => void
+}) {
+  const byDecade = useMemo(() => {
+    const map = new Map<string, typeof albums>()
+    for (const a of albums) {
+      if (a.year) {
+        const decade = `${Math.floor(a.year / 10) * 10}s`
+        const list = map.get(decade) || []
+        list.push(a)
+        map.set(decade, list)
+      }
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => b.localeCompare(a))
+  }, [albums])
+
+  return (
+    <div className="px-6 md:px-8 space-y-6">
+      {byDecade.map(([decade, decadeAlbums]) => (
+        <div key={decade}>
+          <div className="flex items-center gap-3 mb-3">
+            <h2 className="text-xl font-bold">{decade}</h2>
+            <span className="text-xs text-muted-foreground">
+              {decadeAlbums.length} album{decadeAlbums.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+            {decadeAlbums.map((a) => (
+              <SpotifyCard
+                key={a.id}
+                title={a.title}
+                subtitle={a.artist}
+                coverUrl={a.coverUrl}
+                kind="album"
+                badge={a.year ? String(a.year) : undefined}
+                onClick={() => onAlbumClick(a.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BrowseByTags({
+  onAlbumClick,
+}: {
+  onAlbumClick: (id: string) => void
+}) {
+  const tagState = useLibrary((s) => s.tagState)
+  const albums = useLibrary((s) => s.albums)
+  const tags = Object.keys(tagState.tags).sort()
+
+  if (tags.length === 0) {
+    return (
+      <div className="px-6 md:px-8 text-center py-12 text-sm text-muted-foreground">
+        No tags yet. Open an album and add tags to organize your library.
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-6 md:px-8 space-y-6">
+      {tags.map((tag) => {
+        const albumIds = tagState.tags[tag] || []
+        const taggedAlbums = albumIds
+          .map((id) => albums.find((a) => a.id === id))
+          .filter((a): a is NonNullable<typeof a> => Boolean(a))
+        if (taggedAlbums.length === 0) return null
+        return (
+          <div key={tag}>
+            <div className="flex items-center gap-3 mb-3">
+              <h2 className="text-xl font-bold">#{tag}</h2>
+              <span className="text-xs text-muted-foreground">
+                {taggedAlbums.length} album{taggedAlbums.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+              {taggedAlbums.map((a) => (
+                <SpotifyCard
+                  key={a.id}
+                  title={a.title}
+                  subtitle={a.artist}
+                  coverUrl={a.coverUrl}
+                  kind="album"
+                  onClick={() => onAlbumClick(a.id)}
+                />
+              ))}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

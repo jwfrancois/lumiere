@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect, useRef } from 'react'
 import {
   Play,
   Pause,
@@ -16,8 +17,8 @@ import {
 import { useLibrary } from '@/store/library'
 import { formatDuration } from '@/lib/metadata'
 import { cn } from '@/lib/utils'
-import { useEffect, useState, useRef } from 'react'
 import { HiFiBadge } from './hifi-badge'
+import { ExpandedNowPlaying } from './expanded-now-playing'
 
 /**
  * Spotify-style persistent "Now Playing" bar at the bottom of the screen.
@@ -43,6 +44,7 @@ export function SpotifyNowPlayingBar() {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(0.85)
   const [liked, setLiked] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   const audioElRef = useRef<HTMLAudioElement | null>(null)
 
@@ -239,15 +241,19 @@ export function SpotifyNowPlayingBar() {
             />
           </div>
           <button
-            onClick={() => useLibrary.getState().closePlayer()}
+            onClick={() => setExpanded(true)}
             className="text-muted-foreground hover:text-foreground transition p-1.5"
-            aria-label="Minimize"
-            title="Minimize"
+            aria-label="Expand"
+            title="Expand to full player"
           >
-            <Maximize2 className="w-4 h-4 rotate-180" />
+            <Maximize2 className="w-4 h-4" />
           </button>
         </div>
       </div>
+      <ExpandedNowPlaying
+        open={expanded}
+        onClose={() => setExpanded(false)}
+      />
     </div>
   )
 }

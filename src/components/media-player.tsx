@@ -87,6 +87,8 @@ export function MediaPlayer() {
   const analyserRef = useRef<AnalyserNode | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number | null>(null)
+  /** Tracks whether we've already counted this play (30s threshold). */
+  const playCountedRef = useRef(false)
 
   const [state, setState] = useState<PlayerState>({
     isPlaying: false,
@@ -272,11 +274,36 @@ export function MediaPlayer() {
     const el = videoRef.current || audioRef.current
     if (!el) return
     setState((s) => ({ ...s, currentTime: el.currentTime }))
-  }, [])
+    // Roon-style play counting: count a play after 30 seconds of listening
+    // (for audio only). The handleEnded callback also counts on completion.
+    if (
+      currentItem?.kind === 'audio' &&
+      !playCountedRef.current &&
+      el.currentTime >= 30
+    ) {
+      playCountedRef.current = true
+      useLibrary.getState().recordTrackPlay(
+        currentItem.id,
+        currentItem.title,
+        currentItem.subtitle,
+        state.duration || currentItem.metadata.durationSec,
+      )
+    }
+  }, [currentItem, state.duration])
 
   const handleEnded = useCallback(() => {
+    // Record play count for audio tracks if we haven't already counted it
+    // via the 30-second threshold in handleTimeUpdate.
+    if (currentItem?.kind === 'audio' && !playCountedRef.current) {
+      useLibrary.getState().recordTrackPlay(
+        currentItem.id,
+        currentItem.title,
+        currentItem.subtitle,
+        state.duration || currentItem.metadata.durationSec,
+      )
+    }
     next()
-  }, [next])
+  }, [next, currentItem, state.duration])
 
   const togglePlay = useCallback(async () => {
     const el = videoRef.current || audioRef.current
@@ -352,6 +379,8 @@ export function MediaPlayer() {
   useEffect(() => {
     const el = videoRef.current || audioRef.current
     if (!el || !currentItem) return
+    // Reset the play-count flag for the new track
+    playCountedRef.current = false
     // Guard against unavailable files (e.g. after reload, before reconnect).
     // The ReconnectPrompt handles these — we shouldn't try to load them.
     if (currentItem.file.unavailable || !currentItem.file.url) return

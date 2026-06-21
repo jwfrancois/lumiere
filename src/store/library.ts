@@ -33,6 +33,22 @@ import {
   manifestToUnavailableFiles,
   isFsaSupported,
 } from '../lib/persist'
+import {
+  loadHistory,
+  saveHistory,
+  recordPlay,
+  type ListeningHistory,
+  type TrackStats,
+} from '../lib/listening-history'
+import {
+  loadTags,
+  saveTags,
+  addTag as addTagUtil,
+  removeTag as removeTagUtil,
+  getItemTags,
+  getAllTags,
+  type TagState,
+} from '../lib/tags'
 
 export type ViewName =
   | 'home'
@@ -173,6 +189,21 @@ interface LibraryState {
   /** Re-derive categorization from scannedFiles + rawMetadata. Used after
    * manual collection edits so the derived state stays in sync. */
   rederive: () => void
+  // Listening history (Roon-inspired)
+  listeningHistory: ListeningHistory
+  recordTrackPlay: (
+    trackId: string,
+    title: string,
+    subtitle: string | undefined,
+    durationSec?: number,
+  ) => void
+  getTrackStats: (trackId: string) => TrackStats | undefined
+  // Tags (Roon-inspired)
+  tagState: TagState
+  addTag: (tagName: string, itemId: string) => void
+  removeTag: (tagName: string, itemId: string) => void
+  getItemTags: (itemId: string) => string[]
+  getAllTags: () => string[]
 }
 
 /* ----------------------- persistence debounce ------------------------ */
@@ -251,6 +282,10 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   enriching: new Set<string>(),
   isEnriching: false,
   isReconnecting: false,
+  // Listening history + tags start empty (matching SSR) and are loaded
+  // in hydrateFromStorage() after mount to avoid hydration mismatch.
+  listeningHistory: { tracks: {}, events: [] },
+  tagState: { tags: {}, itemTags: {} },
   currentView: 'home',
   detailItem: null,
   queue: [],
@@ -408,6 +443,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     // Only run on client — loadLibrary() returns null on server.
     // Safe to call multiple times; if there's no persisted data, it's a no-op.
     applyPersistedData()
+    // Also load listening history + tags from their own localStorage keys.
+    set({
+      listeningHistory: loadHistory(),
+      tagState: loadTags(),
+    })
   },
 
   persist: () => {
@@ -682,6 +722,38 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }))
     get().rederive()
   },
+
+  /* --------------------- listening history + tags --------------------- */
+
+  recordTrackPlay: (trackId, title, subtitle, durationSec) => {
+    const updated = recordPlay(
+      get().listeningHistory,
+      trackId,
+      title,
+      subtitle,
+      durationSec,
+    )
+    set({ listeningHistory: updated })
+    saveHistory(updated)
+  },
+
+  getTrackStats: (trackId) => get().listeningHistory.tracks[trackId],
+
+  addTag: (tagName, itemId) => {
+    const updated = addTagUtil(get().tagState, tagName, itemId)
+    set({ tagState: updated })
+    saveTags(updated)
+  },
+
+  removeTag: (tagName, itemId) => {
+    const updated = removeTagUtil(get().tagState, tagName, itemId)
+    set({ tagState: updated })
+    saveTags(updated)
+  },
+
+  getItemTags: (itemId) => getItemTags(get().tagState, itemId),
+
+  getAllTags: () => getAllTags(get().tagState),
 }))
 
 /** Convenience hook to build a movie-by-id map (re-derived on each render). */
