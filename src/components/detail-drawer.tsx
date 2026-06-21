@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import {
   Sheet,
   SheetContent,
@@ -21,6 +22,10 @@ import {
   Mic,
   Tv,
   Star,
+  FolderPlus,
+  Pencil,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { useLibrary, useMoviesByIdMap } from '@/store/library'
 import { PosterArt } from './poster-art'
@@ -32,7 +37,9 @@ import {
   buildPodcastQueue,
   buildCollectionQueue,
 } from '@/lib/categorize'
+import { CollectionManager } from './collection-manager'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 
 export function DetailDrawer() {
   const detailItem = useLibrary((s) => s.detailItem)
@@ -45,6 +52,15 @@ export function DetailDrawer() {
   const playQueue = useLibrary((s) => s.playQueue)
   const playNext = useLibrary((s) => s.playNext)
   const moviesById = useMoviesByIdMap()
+  const removeFromCollection = useLibrary((s) => s.removeFromCollection)
+  const renameCollection = useLibrary((s) => s.renameCollection)
+  const deleteCollection = useLibrary((s) => s.deleteCollection)
+
+  // State for the collection manager dialog (add-to-collection flow)
+  const [collectionManagerOpen, setCollectionManagerOpen] = useState(false)
+  const [collectionManagerTarget, setCollectionManagerTarget] = useState<
+    string | undefined
+  >(undefined)
 
   const open = detailItem !== null
   if (!detailItem) {
@@ -105,7 +121,46 @@ export function DetailDrawer() {
           >
             <ListPlus className="w-4 h-4" /> Queue
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setCollectionManagerTarget(undefined)
+              setCollectionManagerOpen(true)
+            }}
+            title="Add to a collection"
+          >
+            <FolderPlus className="w-4 h-4" /> Collection
+          </Button>
         </div>
+
+        {/* If this movie is already in a collection, show which one */}
+        {movie.collectionId &&
+          (() => {
+            const coll = collections.find((c) => c.id === movie.collectionId)
+            if (!coll) return null
+            return (
+              <div className="rounded-lg bg-muted/40 border border-border/40 p-2.5 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    In collection
+                  </div>
+                  <div className="text-sm font-medium truncate">{coll.title}</div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                  onClick={() => {
+                    removeFromCollection(coll.id, movie.id)
+                    toast.success(`Removed "${movie.title}" from "${coll.title}"`)
+                  }}
+                >
+                  <X className="w-3 h-3" /> Remove
+                </Button>
+              </div>
+            )
+          })()}
 
         {/* Ratings row — IMDb / RT / Metacritic */}
         {(enrich?.imdbRating !== undefined ||
@@ -226,6 +281,53 @@ export function DetailDrawer() {
             onClick={() => playNext(buildCollectionQueue(collection, moviesById))}
           >
             <ListPlus className="w-4 h-4" /> Queue All
+          </Button>
+        </div>
+
+        {/* Collection management row */}
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              const newTitle = window.prompt('Rename collection:', collection.title)
+              if (newTitle && newTitle.trim() && newTitle !== collection.title) {
+                renameCollection(collection.id, newTitle.trim())
+                toast.success('Collection renamed')
+              }
+            }}
+          >
+            <Pencil className="w-3.5 h-3.5" /> Rename
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setCollectionManagerTarget(collection.id)
+              setCollectionManagerOpen(true)
+            }}
+          >
+            <FolderPlus className="w-3.5 h-3.5" /> Add Movies
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive ml-auto"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete collection "${collection.title}"? The movies will remain in your library as standalone items.`,
+                )
+              ) {
+                deleteCollection(collection.id)
+                closeDetail()
+                toast.success('Collection deleted')
+              }
+            }}
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete
           </Button>
         </div>
 
@@ -587,6 +689,22 @@ export function DetailDrawer() {
           <div className="p-5">{content}</div>
         </ScrollArea>
       </SheetContent>
+      {collectionManagerOpen && (
+        <CollectionManager
+          key={`detail-cm-${detailItem?.id || 'new'}-${collectionManagerTarget || 'new'}`}
+          open={collectionManagerOpen}
+          onOpenChange={(o) => {
+            setCollectionManagerOpen(o)
+            if (!o) setCollectionManagerTarget(undefined)
+          }}
+          existingCollectionId={collectionManagerTarget}
+          initialSelectedMovieIds={
+            detailItem?.kind === 'movie' && !collectionManagerTarget
+              ? [detailItem.id]
+              : undefined
+          }
+        />
+      )}
     </Sheet>
   )
 }

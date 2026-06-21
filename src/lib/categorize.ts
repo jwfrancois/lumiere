@@ -423,61 +423,92 @@ export function categorizeFiles(
     pod.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber)
   }
 
-  // Detect movie collections — group movies that share a common word prefix
-  // of at least 2 words AND have a sequel-style marker (numeric or roman).
-  // Examples that should group:
-  //   "Lord of the Rings - Fellowship of the Ring 1"
-  //   "Lord of the Rings - The Two Towers 2"
+  // Detect movie collections using a unified shared-prefix clustering
+  // algorithm. We try the SHORTEST prefix first (3 words) to capture the
+  // largest possible group, then progressively longer prefixes for any
+  // remaining movies.
+  //
+  // This catches both numbered sequels and subtitle-based sequels:
+  //   "Lord of the Rings - Fellowship 1"
+  //   "Lord of the Rings - Two Towers 2"
   //   "Lord of the Rings - Return of the King 3"
-  // We use word-level shared-prefix clustering.
+  //   → groups at prefix 3 "lord of the"
+  //
+  //   "The Hunger Games"
+  //   "The Hunger Games Catching Fire"
+  //   "The Hunger Games Mockingjay Part 1"
+  //   "The Hunger Games Mockingjay Part 2"
+  //   → groups at prefix 3 "the hunger games"
+  //
+  //   "Star Wars A New Hope"
+  //   "Star Wars The Empire Strikes Back"
+  //   "Star Wars Return of the Jedi"
+  //   → does NOT group (word 3 differs: "a" vs "the" vs "return")
+  //     — user can create this collection manually
   type MovieWithKey = {
     movie: MovieItem
     sequel: number
     words: string[]
+    normalized: string
   }
-  const withKeys: MovieWithKey[] = []
+  const allMoviesWithKeys: MovieWithKey[] = []
   for (const movie of movies) {
     const normalized = normalizeTitle(movie.title)
-    const sequel = parseSequelNumber(normalized)
-    if (sequel === null) continue
+    const sequel = parseSequelNumber(normalized) ?? 0
     const stripped = stripSequelNumber(normalized)
     const words = stripped.split(/\s+/).filter(Boolean)
     if (words.length < 2) continue
-    withKeys.push({ movie, sequel, words })
+    allMoviesWithKeys.push({ movie, sequel, words, normalized })
   }
 
-  // Cluster movies that share the first N words (greedy: try N=5 down to 2).
   const collectionMap = new Map<string, MovieWithKey[]>()
   const used = new Set<string>()
-  for (let prefixLen = 5; prefixLen >= 2; prefixLen--) {
-    for (const item of withKeys) {
+
+  // Try prefix lengths from 3 (shortest, most inclusive) up to 5.
+  // At each level, group all remaining movies that share that prefix.
+  // Once a group is formed, its members are locked in.
+  for (let prefixLen = 3; prefixLen <= 5; prefixLen++) {
+    for (const item of allMoviesWithKeys) {
       if (used.has(item.movie.id)) continue
       if (item.words.length < prefixLen) continue
       const key = item.words.slice(0, prefixLen).join(' ')
-      // Find others not yet used that share this prefix
-      const group = withKeys.filter(
+      const group = allMoviesWithKeys.filter(
         (o) =>
           !used.has(o.movie.id) &&
           o.words.length >= prefixLen &&
           o.words.slice(0, prefixLen).join(' ') === key,
       )
       if (group.length >= 2) {
-        collectionMap.set(key, group)
-        for (const g of group) used.add(g.movie.id)
+        // Use the longest shared prefix across the group as the key.
+        // This gives a cleaner collection title (e.g. "The Hunger Games"
+        // instead of "The Hunger").
+        const titles = group.map((g) => g.normalized)
+        const shared = sharedPrefix(titles)
+        const finalKey = shared || key
+        if (!collectionMap.has(finalKey)) {
+          collectionMap.set(finalKey, group)
+          for (const g of group) used.add(g.movie.id)
+        }
       }
     }
   }
 
   const collections: CollectionItem[] = []
   for (const [base, group] of collectionMap.entries()) {
-    group.sort((a, b) => a.sequel - b.sequel)
+    // Sort: sequel-numbered first (by sequel #), then alphabetical
+    group.sort((a, b) => {
+      if (a.sequel && b.sequel) return a.sequel - b.sequel
+      if (a.sequel && !b.sequel) return -1
+      if (!a.sequel && b.sequel) return 1
+      return a.normalized.localeCompare(b.normalized)
+    })
     const collectionId = uid()
     for (let i = 0; i < group.length; i++) {
       group[i].movie.collectionId = collectionId
       group[i].movie.collectionOrder = i + 1
     }
     // Use the longest shared prefix as the collection title
-    const titles = group.map((g) => normalizeTitle(g.movie.title))
+    const titles = group.map((g) => g.normalized)
     const shared = sharedPrefix(titles)
     collections.push({
       id: collectionId,

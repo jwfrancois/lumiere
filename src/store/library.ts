@@ -157,6 +157,22 @@ interface LibraryState {
   reconnectFolder: (folderId: string) => Promise<boolean>
   /** Mark all files belonging to a folder as unavailable. */
   disconnectFolder: (folderId: string) => void
+  // Manual collection management
+  /** Create a new collection from a list of movie ids. Returns the new
+   * collection id so callers can navigate to it. */
+  createCollection: (title: string, movieIds: string[]) => string
+  /** Add movies to an existing collection. */
+  addToCollection: (collectionId: string, movieIds: string[]) => void
+  /** Remove a movie from its collection. If the collection drops below 2
+   * movies, it is automatically dissolved. */
+  removeFromCollection: (collectionId: string, movieId: string) => void
+  /** Rename a collection. */
+  renameCollection: (collectionId: string, newTitle: string) => void
+  /** Delete a collection entirely (movies go back to standalone). */
+  deleteCollection: (collectionId: string) => void
+  /** Re-derive categorization from scannedFiles + rawMetadata. Used after
+   * manual collection edits so the derived state stays in sync. */
+  rederive: () => void
 }
 
 /* ----------------------- persistence debounce ------------------------ */
@@ -531,6 +547,140 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     )
     set({ scannedFiles, scannedFolders })
     schedulePersist()
+  },
+
+  /* --------------------- manual collection management --------------------- */
+
+  rederive: () => {
+    // Re-run categorization from the current scannedFiles + rawMetadata.
+    // Used after manual collection edits so movies/collections arrays stay
+    // in sync with any collectionId changes we made directly.
+    const allFiles = get().scannedFiles
+    const allMeta = get().rawMetadata
+    const input = allFiles.map((f) => ({
+      file: f,
+      metadata: allMeta[f.id] || ({} as MediaMetadata),
+    }))
+    const result = categorizeFiles(input)
+    // Preserve any manually-set collectionId / collectionOrder on movies
+    // by re-applying them after categorization re-derives its own.
+    // (categorizeFiles resets collectionId based on its detection logic, so
+    // we need to override with our manual state stored in a side map.)
+    const manualCollections = get().collections
+    const manualCollectionIds = new Map<string, string>() // movieId -> collectionId
+    for (const c of manualCollections) {
+      for (const mid of c.movieIds) {
+        manualCollectionIds.set(mid, c.id)
+      }
+    }
+    // Override the auto-derived collection membership with manual state
+    const finalMovies = result.movies.map((m) => {
+      const manualCid = manualCollectionIds.get(m.id)
+      if (manualCid) {
+        const coll = manualCollections.find((c) => c.id === manualCid)
+        if (coll) {
+          const order = coll.movieIds.indexOf(m.id) + 1
+          return { ...m, collectionId: manualCid, collectionOrder: order }
+        }
+      }
+      // If auto-detected a collection but we don't have it manually, clear it
+      // (unless it's also in our manual list — which we just handled)
+      if (m.collectionId && !manualCollections.some((c) => c.id === m.collectionId)) {
+        return { ...m, collectionId: undefined, collectionOrder: undefined }
+      }
+      return m
+    })
+    set({
+      movies: finalMovies,
+      collections: manualCollections,
+      tvShows: result.tvShows,
+      albums: result.albums,
+      podcasts: result.podcasts,
+      stats: {
+        ...result.stats,
+        standaloneMovies: finalMovies.filter((m) => !m.collectionId).length,
+        collectionMovies: finalMovies.filter((m) => m.collectionId).length,
+        collections: manualCollections.length,
+      },
+    })
+    schedulePersist()
+  },
+
+  createCollection: (title, movieIds) => {
+    const id =
+      Math.random().toString(36).slice(2, 10) +
+      Date.now().toString(36).slice(-4)
+    const newCollection: CollectionItem = {
+      id,
+      title,
+      category: 'movie',
+      isCollection: true,
+      movieIds: [...movieIds],
+      coverUrl: undefined,
+      year: undefined,
+    }
+    // Try to grab cover/year from first movie
+    const firstMovie = get().movies.find((m) => m.id === movieIds[0])
+    if (firstMovie) {
+      newCollection.coverUrl = firstMovie.coverUrl
+      newCollection.year = firstMovie.year
+    }
+    set((s) => ({
+      collections: [...s.collections, newCollection],
+    }))
+    // Re-derive so movie.collectionId gets set
+    get().rederive()
+    return id
+  },
+
+  addToCollection: (collectionId, movieIds) => {
+    set((s) => ({
+      collections: s.collections.map((c) =>
+        c.id === collectionId
+          ? {
+              ...c,
+              movieIds: [
+                ...c.movieIds,
+                ...movieIds.filter((id) => !c.movieIds.includes(id)),
+              ],
+            }
+          : c,
+      ),
+    }))
+    get().rederive()
+  },
+
+  removeFromCollection: (collectionId, movieId) => {
+    const coll = get().collections.find((c) => c.id === collectionId)
+    if (!coll) return
+    const newMovieIds = coll.movieIds.filter((id) => id !== movieId)
+    if (newMovieIds.length < 2) {
+      // Auto-dissolve: too few movies to be a collection
+      get().deleteCollection(collectionId)
+      return
+    }
+    set((s) => ({
+      collections: s.collections.map((c) =>
+        c.id === collectionId ? { ...c, movieIds: newMovieIds } : c,
+      ),
+    }))
+    get().rederive()
+  },
+
+  renameCollection: (collectionId, newTitle) => {
+    set((s) => ({
+      collections: s.collections.map((c) =>
+        c.id === collectionId ? { ...c, title: newTitle } : c,
+      ),
+    }))
+    schedulePersist()
+  },
+
+  deleteCollection: (collectionId) => {
+    set((s) => ({
+      collections: s.collections.filter((c) => c.id !== collectionId),
+    }))
+    get().rederive()
   },
 }))
 

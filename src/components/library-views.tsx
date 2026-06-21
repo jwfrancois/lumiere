@@ -24,6 +24,7 @@ import {
   Clock,
   Trophy,
   PlayCircle,
+  Plus,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -35,6 +36,10 @@ import { Top10Rail } from './top10-rail'
 import { GenreFilter, collectGenres } from './genre-filter'
 import { SpotifyCard } from './spotify-card'
 import { SpotifyRail } from './spotify-rail'
+import {
+  CollectionManager,
+  CollectionsEmptyState,
+} from './collection-manager'
 
 /* ----------------------------------------------------------------
  * Home view — keeps the original dashboard style
@@ -707,11 +712,13 @@ export function MoviesView() {
 /** Netflix-style Collections view */
 export function CollectionsView() {
   const collections = useLibrary((s) => s.collections)
+  const movies = useLibrary((s) => s.movies)
   const enrichment = useLibrary((s) => s.enrichment)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
   const moviesById = useMoviesByIdMap()
   const [query, setQuery] = useState('')
+  const [managerOpen, setManagerOpen] = useState(false)
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
@@ -735,20 +742,42 @@ export function CollectionsView() {
     },
   )
 
+  const hasMovies = movies.length > 0
+
   if (collections.length === 0) {
     return (
-      <EmptyView
-        title="Collections"
-        hint="No movie collections detected. Lumière groups movies with sequel numbers (e.g. 'Movie 2', 'Movie III') into collections automatically."
-      />
+      <div className="pb-12">
+        <div className="flex items-center justify-between mb-5 px-6 md:px-8">
+          <h1 className="text-2xl font-bold tracking-tight">Collections</h1>
+          {hasMovies && (
+            <Button
+              onClick={() => setManagerOpen(true)}
+              className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold"
+            >
+              <Plus className="w-4 h-4" /> Create Collection
+            </Button>
+          )}
+        </div>
+        <CollectionsEmptyState
+          onCreate={() => setManagerOpen(true)}
+          hasMovies={hasMovies}
+        />
+        {managerOpen && (
+          <CollectionManager
+            key="new-collection"
+            open={managerOpen}
+            onOpenChange={setManagerOpen}
+          />
+        )}
+      </div>
     )
   }
 
   return (
     <div className="pb-12">
       <NetflixHero items={heroItems} />
-      <div className="px-6 md:px-8 mb-6">
-        <div className="relative max-w-md">
+      <div className="px-6 md:px-8 mb-6 flex items-center gap-3">
+        <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder="Search collections…"
@@ -757,6 +786,14 @@ export function CollectionsView() {
             className="pl-9 bg-white/5 border-white/10"
           />
         </div>
+        {hasMovies && (
+          <Button
+            onClick={() => setManagerOpen(true)}
+            className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold shrink-0"
+          >
+            <Plus className="w-4 h-4" /> New
+          </Button>
+        )}
       </div>
       <NetflixRail title={`Collections (${filtered.length})`}>
         {filtered.map((c) => (
@@ -773,6 +810,13 @@ export function CollectionsView() {
           />
         ))}
       </NetflixRail>
+      {managerOpen && (
+        <CollectionManager
+          key="new-collection"
+          open={managerOpen}
+          onOpenChange={setManagerOpen}
+        />
+      )}
     </div>
   )
 }
