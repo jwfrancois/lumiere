@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { useLibrary, type ViewName } from '@/store/library'
 import { MediaCard } from './media-card'
 import { PosterArt } from './poster-art'
@@ -1001,6 +1001,15 @@ export function MusicView() {
   >('albums')
   const [focusedIds, setFocusedIds] = useState<string[] | null>(null)
 
+  // Stable callback for FocusFilter — prevents infinite re-renders.
+  // Returns null when no filtering is active (all albums match).
+  const handleFocusedChange = useCallback(
+    (ids: string[]) => {
+      setFocusedIds(ids.length < albums.length ? ids : null)
+    },
+    [albums.length],
+  )
+
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
     let list = albums
@@ -1123,7 +1132,7 @@ export function MusicView() {
         <div className="px-6 md:px-8">
           <FocusFilter
             albumIds={albums.map((a) => a.id)}
-            onFilteredChange={(ids) => setFocusedIds(ids.length < albums.length ? ids : null)}
+            onFilteredChange={handleFocusedChange}
           />
         </div>
       )}

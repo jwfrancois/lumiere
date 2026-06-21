@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useLibrary } from '@/store/library'
 import { Filter, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -117,8 +117,10 @@ export function FocusFilter({ albumIds, onFilteredChange }: FocusFilterProps) {
     return result
   }, [albums, albumIds, filters, tagState, listeningHistory])
 
-  // Notify parent of filtered results
-  useMemo(() => {
+  // Notify parent of filtered results AFTER render commit (not during).
+  // Calling onFilteredChange inside useMemo would trigger a setState in the
+  // parent during this component's render, which React forbids.
+  useEffect(() => {
     onFilteredChange(filteredIds)
   }, [filteredIds, onFilteredChange])
 
