@@ -85,26 +85,36 @@ export function loadLibrary(): PersistedLibrary | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(LS_KEY)
-    if (!raw) {
-      // Try migrating from v1 key
-      const old = localStorage.getItem('lumiere:library:v1')
-      if (old) {
-        const parsed = JSON.parse(old) as PersistedLibrary & {
-          enrichment?: Record<string, EnrichedInfo>
-        }
-        // If old data has enrichment, save it to IndexedDB
-        if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
-          void saveEnrichment(parsed.enrichment)
-        }
-        const { enrichment: _, ...rest } = parsed
-        void _
-        return { ...rest, version: 2 }
-      }
-      return null
+    if (raw) {
+      const parsed = JSON.parse(raw) as PersistedLibrary
+      if (parsed.version !== 2) return null
+      return parsed
     }
-    const parsed = JSON.parse(raw) as PersistedLibrary
-    if (parsed.version !== 2) return null
-    return parsed
+    // No v2 data — try migrating from v1 key
+    const old = localStorage.getItem('lumiere:library:v1')
+    if (old) {
+      console.log('[persist] Migrating from v1 to v2 format...')
+      const parsed = JSON.parse(old) as PersistedLibrary & {
+        enrichment?: Record<string, EnrichedInfo>
+        version: number
+      }
+      // If old data has enrichment, save it to IndexedDB
+      if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
+        void saveEnrichment(parsed.enrichment)
+      }
+      const { enrichment: _, ...rest } = parsed
+      void _
+      const migrated: PersistedLibrary = { ...rest, version: 2 }
+      // Immediately save the migrated data to v2 key so it persists
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(migrated))
+        console.log('[persist] Migration complete — v2 data saved')
+      } catch {
+        console.warn('[persist] Could not save migrated v2 data (quota?)')
+      }
+      return migrated
+    }
+    return null
   } catch (err) {
     console.warn('loadLibrary failed', err)
     return null
@@ -113,9 +123,10 @@ export function loadLibrary(): PersistedLibrary | null {
 
 export function clearLibrary(): void {
   if (typeof window === 'undefined') return
+  // Remove v2 key but KEEP v1 as a backup (in case of accidental clear).
+  // The v1 key will be ignored on load since we check v2 first.
   try {
     localStorage.removeItem(LS_KEY)
-    localStorage.removeItem('lumiere:library:v1')
   } catch {
     /* ignore */
   }
