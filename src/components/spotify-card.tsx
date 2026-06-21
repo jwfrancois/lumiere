@@ -40,7 +40,12 @@ export function SpotifyCard({
   const enrichment = useLibrary((s) =>
     enrichmentKey ? s.enrichment[enrichmentKey] : undefined,
   ) as EnrichedInfo | undefined
-  const cover = coverUrl || enrichment?.posterUrl
+  // Prefer embedded cover, then fetched hi-res artwork, then fetched standard artwork
+  const cover =
+    coverUrl ||
+    enrichment?.artworkUrlHiRes ||
+    enrichment?.artworkUrl ||
+    enrichment?.posterUrl
 
   return (
     <div
@@ -92,6 +97,9 @@ export function SpotifyCard({
       <h3 className="text-sm font-semibold text-foreground truncate">{title}</h3>
       {subtitle && (
         <p className="text-xs text-muted-foreground truncate mt-0.5">{subtitle}</p>
+      )}
+      {enrichment?.genre && !badge && (
+        <p className="text-[10px] text-[var(--accent)]/70 truncate mt-0.5">{enrichment.genre}</p>
       )}
     </div>
   )

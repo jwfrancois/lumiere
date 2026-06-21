@@ -78,8 +78,9 @@ export interface ScannedFolderInfo {
   connected?: boolean
 }
 
-/** Enrichment data fetched from OMDB. */
+/** Enrichment data fetched from OMDB / iTunes / Wikipedia. */
 export interface EnrichedInfo {
+  // Movie/TV (OMDB)
   posterUrl?: string
   imdbRating?: number
   rottenTomatoes?: number
@@ -92,6 +93,15 @@ export interface EnrichedInfo {
   cast?: string
   awards?: string
   totalSeasons?: number
+  // Music (iTunes)
+  artworkUrl?: string
+  artworkUrlHiRes?: string
+  copyright?: string
+  itunesUrl?: string
+  // Artist (Wikipedia + iTunes)
+  photoUrl?: string
+  bio?: string
+  description?: string
 }
 
 interface LibraryState {

@@ -553,6 +553,14 @@ export function DetailDrawer() {
   } else if (detailItem.kind === 'album') {
     const album = albums.find((a) => a.id === detailItem.id)
     if (!album) return null
+    const albumEnrich = useLibrary.getState().enrichment[`album:${album.id}`]
+    const artistEnrich = useLibrary.getState().enrichment[`artist:${album.artist.toLowerCase()}`]
+    // Use fetched artwork if no embedded cover
+    const albumArt = album.coverUrl || albumEnrich?.artworkUrlHiRes || albumEnrich?.artworkUrl
+    // Find other albums by the same artist (discography)
+    const discography = albums.filter(
+      (a) => a.id !== album.id && a.artist === album.artist,
+    )
     title = album.title
     description = `by ${album.artist}${album.year ? ` · ${album.year}` : ''}`
     content = (
@@ -560,7 +568,7 @@ export function DetailDrawer() {
         <div className="flex gap-3">
           <Button
             onClick={() => playQueue(buildAlbumQueue(album))}
-            className="flex-1 bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+            className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold"
           >
             <Play className="w-4 h-4 fill-current" /> Play Album
           </Button>
@@ -569,6 +577,82 @@ export function DetailDrawer() {
           </Button>
         </div>
 
+        {/* Album metadata */}
+        <DetailMeta
+          rows={[
+            (albumEnrich?.year || album.year) && { icon: Calendar, label: 'Year', value: String(albumEnrich?.year || album.year) },
+            (albumEnrich?.genre || album.genre) && { icon: Star, label: 'Genre', value: albumEnrich?.genre || album.genre || '' },
+            album.tracks.length > 0 && { icon: Disc3, label: 'Tracks', value: String(album.tracks.length) },
+            albumEnrich?.copyright && { icon: Mic, label: '©', value: albumEnrich.copyright },
+          ].filter(Boolean) as { icon: typeof Calendar; label: string; value: string }[]}
+        />
+
+        {/* Artist bio + photo */}
+        {(artistEnrich?.bio || artistEnrich?.photoUrl) && (
+          <div className="rounded-lg bg-muted/30 border border-border/40 p-3 space-y-2">
+            <div className="flex items-center gap-3">
+              {artistEnrich?.photoUrl && (
+                <div className="w-14 h-14 rounded-full overflow-hidden bg-muted shrink-0 border border-white/10">
+                  <img
+                    src={artistEnrich.photoUrl}
+                    alt={album.artist}
+                    className="w-full h-full object-cover"
+                    onError={(e) => { e.currentTarget.style.display = 'none' }}
+                  />
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Artist</div>
+                <div className="text-sm font-bold truncate">{album.artist}</div>
+                {artistEnrich?.description && (
+                  <div className="text-xs text-muted-foreground truncate">{artistEnrich.description}</div>
+                )}
+              </div>
+            </div>
+            {artistEnrich?.bio && (
+              <p className="text-xs text-muted-foreground leading-relaxed">{artistEnrich.bio}</p>
+            )}
+          </div>
+        )}
+
+        {/* Discography — other albums by the same artist */}
+        {discography.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold mb-2 text-amber-300/90 flex items-center gap-2">
+              <Disc3 className="w-4 h-4" />
+              More from {album.artist}
+            </h4>
+            <div className="space-y-1">
+              {discography.map((a) => {
+                const aEnrich = useLibrary.getState().enrichment[`album:${a.id}`]
+                const aArt = a.coverUrl || aEnrich?.artworkUrlHiRes || aEnrich?.artworkUrl
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => openDetail({ kind: 'album', id: a.id })}
+                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-muted/60 transition text-left group"
+                  >
+                    <div className="w-12 h-12 rounded overflow-hidden bg-muted shrink-0">
+                      {aArt ? (
+                        <img src={aArt} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/20 to-rose-500/20">
+                          <Disc3 className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate group-hover:text-amber-300 transition-colors">{a.title}</div>
+                      <div className="text-xs text-muted-foreground">{a.year || '—'} · {a.tracks.length} tracks</div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Track Listing */}
         <div>
           <h4 className="text-sm font-semibold mb-2 text-amber-300/90 flex items-center gap-2">
             <Disc3 className="w-4 h-4" />
@@ -608,10 +692,6 @@ export function DetailDrawer() {
             ))}
           </div>
         </div>
-
-        {album.genre && (
-          <DetailMeta rows={[{ icon: Star, label: 'Genre', value: album.genre }]} />
-        )}
       </div>
     )
   } else if (detailItem.kind === 'podcast') {
@@ -706,11 +786,13 @@ export function DetailDrawer() {
     kind = 'tv'
   } else if (detailItem.kind === 'album') {
     const a = albums.find((x) => x.id === detailItem.id)
-    coverUrl = a?.coverUrl
+    const aEnrich = useLibrary.getState().enrichment[`album:${detailItem.id}`]
+    coverUrl = a?.coverUrl || aEnrich?.artworkUrlHiRes || aEnrich?.artworkUrl
     kind = 'album'
   } else if (detailItem.kind === 'podcast') {
     const p = podcasts.find((x) => x.id === detailItem.id)
-    coverUrl = p?.coverUrl
+    const pEnrich = useLibrary.getState().enrichment[`podcast:${detailItem.id}`]
+    coverUrl = p?.coverUrl || pEnrich?.artworkUrlHiRes || pEnrich?.artworkUrl
     kind = 'podcast'
   }
 

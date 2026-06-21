@@ -18,6 +18,7 @@ import {
 } from '@/components/library-views'
 import { useLibrary } from '@/store/library'
 import { useEnrichmentOrchestrator } from '@/hooks/use-enrichment-orchestrator'
+import { useMusicEnrichment } from '@/hooks/use-music-enrichment'
 import { Button } from '@/components/ui/button'
 import { EnrichmentIndicator } from '@/components/enrichment-indicator'
 import { cn } from '@/lib/utils'
@@ -31,6 +32,8 @@ export default function Home() {
 
   // Kick off background metadata enrichment for new movies / TV shows.
   useEnrichmentOrchestrator()
+  // Kick off background enrichment for music albums + artist bios.
+  useMusicEnrichment()
 
   // CRITICAL: Hydrate the persisted library AFTER React has mounted.
   // The store initializes empty (matching SSR) so the first client render

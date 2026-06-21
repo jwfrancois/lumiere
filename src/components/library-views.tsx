@@ -1030,6 +1030,7 @@ export function MusicView() {
   const currentIndex = useLibrary((s) => s.currentIndex)
   const listeningHistory = useLibrary((s) => s.listeningHistory)
   const tagState = useLibrary((s) => s.tagState)
+  const enrichment = useLibrary((s) => s.enrichment)
   const [query, setQuery] = useState('')
   const [browseMode, setBrowseMode] = useState<
     'albums' | 'artists' | 'composers' | 'decades' | 'tags'
@@ -1188,6 +1189,7 @@ export function MusicView() {
                         coverUrl={a.coverUrl}
                         kind="album"
                         badge={`${a.tracks.length} tracks`}
+                        enrichmentKey={`album:${a.id}`}
                         onClick={() => openDetail({ kind: 'album', id: a.id })}
                         onPlay={() => playQueue(buildAlbumQueue(a))}
                         isPlaying={currentPlayingAlbumId === a.id}
@@ -1197,26 +1199,40 @@ export function MusicView() {
                 </SpotifyRail>
               )}
 
-              {/* Quick pick tiles (artist shortcuts) */}
+              {/* Quick pick tiles (artist shortcuts with photos) */}
               {artists.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 px-6 md:px-8 mb-8">
                   {artists.map((artist) => {
                     const artistAlbums = albums.filter((a) => a.artist === artist)
                     const firstAlbum = artistAlbums[0]
                     if (!firstAlbum) return null
+                    const artistEnrich = enrichment[`artist:${artist.toLowerCase()}`]
+                    const artistPhoto = artistEnrich?.photoUrl
+                    const albumArt =
+                      firstAlbum.coverUrl ||
+                      enrichment[`album:${firstAlbum.id}`]?.artworkUrlHiRes ||
+                      enrichment[`album:${firstAlbum.id}`]?.artworkUrl
                     return (
                       <button
                         key={artist}
                         onClick={() => openDetail({ kind: 'album', id: firstAlbum.id })}
                         className="flex items-center gap-3 rounded-md overflow-hidden bg-white/[0.04] hover:bg-white/[0.1] transition group"
                       >
-                        <div className="w-14 h-14 shrink-0 overflow-hidden">
-                          <PosterArt
-                            coverUrl={firstAlbum.coverUrl}
-                            title={artist}
-                            kind="album"
-                            square
-                          />
+                        <div className="w-14 h-14 shrink-0 overflow-hidden rounded-full">
+                          {artistPhoto ? (
+                            <img
+                              src={artistPhoto}
+                              alt={artist}
+                              className="w-full h-full object-cover"
+                              onError={(e) => { e.currentTarget.style.display = 'none' }}
+                            />
+                          ) : albumArt ? (
+                            <img src={albumArt} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/30 to-rose-500/30">
+                              <Music className="w-5 h-5 text-[var(--accent)]" />
+                            </div>
+                          )}
                         </div>
                         <span className="text-sm font-semibold truncate pr-3">{artist}</span>
                       </button>
@@ -1243,7 +1259,8 @@ export function MusicView() {
                   coverUrl={a.coverUrl}
                   kind="album"
                   badge={a.year ? String(a.year) : undefined}
-                  onClick={() => openDetail({ kind: 'album', id: a.id })}
+                  enrichmentKey={`album:${a.id}`}
+                        onClick={() => openDetail({ kind: 'album', id: a.id })}
                   onPlay={() => playQueue(buildAlbumQueue(a))}
                   isPlaying={currentPlayingAlbumId === a.id}
                 />
@@ -1314,7 +1331,8 @@ function BrowseByArtist({
                 coverUrl={a.coverUrl}
                 kind="album"
                 badge={a.year ? String(a.year) : undefined}
-                onClick={() => onAlbumClick(a.id)}
+                enrichmentKey={`album:${a.id}`}
+                        onClick={() => onAlbumClick(a.id)}
               />
             ))}
           </div>
@@ -1372,7 +1390,8 @@ function BrowseByComposer({
                 subtitle={a.artist}
                 coverUrl={a.coverUrl}
                 kind="album"
-                onClick={() => onAlbumClick(a.id)}
+                enrichmentKey={`album:${a.id}`}
+                        onClick={() => onAlbumClick(a.id)}
               />
             ))}
           </div>
@@ -1421,7 +1440,8 @@ function BrowseByDecade({
                 coverUrl={a.coverUrl}
                 kind="album"
                 badge={a.year ? String(a.year) : undefined}
-                onClick={() => onAlbumClick(a.id)}
+                enrichmentKey={`album:${a.id}`}
+                        onClick={() => onAlbumClick(a.id)}
               />
             ))}
           </div>
@@ -1472,7 +1492,8 @@ function BrowseByTags({
                   subtitle={a.artist}
                   coverUrl={a.coverUrl}
                   kind="album"
-                  onClick={() => onAlbumClick(a.id)}
+                  enrichmentKey={`album:${a.id}`}
+                        onClick={() => onAlbumClick(a.id)}
                 />
               ))}
             </div>
@@ -1613,7 +1634,8 @@ export function PodcastsView() {
                   coverUrl={p.coverUrl}
                   kind="podcast"
                   badge={`${p.episodes.length} eps`}
-                  onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                  enrichmentKey={`podcast:${p.id}`}
+                        onClick={() => openDetail({ kind: 'podcast', id: p.id })}
                   onPlay={() => playQueue(buildPodcastQueue(p))}
                   isPlaying={currentPlayingPodcastId === p.id}
                 />
@@ -1637,7 +1659,8 @@ export function PodcastsView() {
                 subtitle={p.host}
                 coverUrl={p.coverUrl}
                 kind="podcast"
-                onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                enrichmentKey={`podcast:${p.id}`}
+                        onClick={() => openDetail({ kind: 'podcast', id: p.id })}
                 onPlay={() => playQueue(buildPodcastQueue(p))}
                 isPlaying={currentPlayingPodcastId === p.id}
               />
