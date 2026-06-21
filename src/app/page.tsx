@@ -19,6 +19,7 @@ import {
 import { useLibrary } from '@/store/library'
 import { useEnrichmentOrchestrator } from '@/hooks/use-enrichment-orchestrator'
 import { useMusicEnrichment } from '@/hooks/use-music-enrichment'
+import { useNeonSync } from '@/hooks/use-neon-sync'
 import { Button } from '@/components/ui/button'
 import { EnrichmentIndicator } from '@/components/enrichment-indicator'
 import { cn } from '@/lib/utils'
@@ -34,6 +35,8 @@ export default function Home() {
   useEnrichmentOrchestrator()
   // Kick off background enrichment for music albums + artist bios.
   useMusicEnrichment()
+  // Sync library to Neon database (with IndexedDB fallback).
+  useNeonSync()
 
   // CRITICAL: Hydrate the persisted library AFTER React has mounted.
   // The store initializes empty (matching SSR) so the first client render

@@ -1,32 +1,181 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// Lumière — Prisma schema for Neon (serverless PostgreSQL)
+//
+// Architecture: The actual media files stay in the browser (File System
+// Access API). Neon stores the METADATA layer — what files you have,
+// their enrichment (posters, ratings, bios), collections, history, and tags.
+// This syncs across all your devices.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ── Library ────────────────────────────────────────────────────────────
+
+/// A scanned folder (e.g. "Movies", "Music", "TV Shows")
+model Folder {
+  id          String   @id
+  name        String
+  fileCount   Int
+  scannedAt   DateTime @default(now())
+  hasFsaHandle Boolean @default(false)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files       FileEntry[]
+
+  @@index([userId])
 }
 
-model Post {
+/// A media file manifest entry (no File object — just metadata)
+model FileEntry {
+  id          String   @id
+  name        String
+  path        String
+  kind        String   // "video" | "audio"
+  size        BigInt
+  folderId    String?
+  folder      Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metadata    FileMetadata?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([folderId])
+}
+
+/// Embedded metadata extracted from the file (ID3 tags, MP4 atoms, etc.)
+model FileMetadata {
+  fileId      String   @id
+  file        FileEntry @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  title       String?
+  artist      String?
+  album       String?
+  albumArtist String?
+  year        Int?
+  trackNumber Int?
+  trackTotal  Int?
+  durationSec Float?
+  genre       String?
+  showName    String?
+  seasonNumber Int?
+  episodeNumber Int?
+  description  String?
+  composer     String?
+  copyright    String?
+  container    String?
+  audioCodec   String?
+  videoCodec   String?
+  width        Int?
+  height       Int?
+  bitrate      Int?
+  sampleRate   Int?
+  channels     Int?
+}
+
+// ── Enrichment ─────────────────────────────────────────────────────────
+
+/// Enrichment data fetched from OMDB / iTunes / Wikipedia
+/// Keyed by type:id (e.g. "movie:abc123", "tv:def456", "album:xyz789")
+model Enrichment {
+  id          String   @id // e.g. "movie:abc123"
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Movie/TV (OMDB)
+  posterUrl       String?
+  imdbRating      Float?
+  rottenTomatoes  Int?
+  metacritic      Int?
+  plot            String?
+  genre           String?
+  runtime         String?
+  rated           String?
+  director        String?
+  cast            String?
+  awards          String?
+  totalSeasons    Int?
+  // Music (iTunes)
+  artworkUrl      String?
+  artworkUrlHiRes String?
+  copyright       String?
+  itunesUrl       String?
+  // Artist (Wikipedia + iTunes)
+  photoUrl        String?
+  bio             String?
+  description     String?
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ── Collections ────────────────────────────────────────────────────────
+
+/// A movie collection (franchise, trilogy, etc.)
+model Collection {
+  id          String   @id
+  title       String
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movieIds    String[] // array of FileEntry IDs
+  coverUrl    String?
+  year        Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ── Listening History ──────────────────────────────────────────────────
+
+/// Play count tracking (Roon-inspired)
+model ListeningHistory {
+  id              String   @id @default(cuid())
+  trackId         String   // FileEntry ID
+  trackTitle      String
+  trackSubtitle   String?
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  playCount       Int      @default(0)
+  firstPlayed     DateTime @default(now())
+  lastPlayed      DateTime @default(now())
+  totalDurationSec Float   @default(0)
+
+  @@unique([trackId, userId])
+  @@index([userId])
+}
+
+// ── Tags ───────────────────────────────────────────────────────────────
+
+/// User-defined tags on albums/tracks
+model Tag {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  name      String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemIds   String[] // FileEntry or Album IDs
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  @@unique([name, userId])
+  @@index([userId])
+}
+
+// ── User ───────────────────────────────────────────────────────────────
+
+/// Simple user model — for a personal app, a single user with a device key.
+/// For multi-user, add NextAuth.js later.
+model User {
+  id            String   @id @default(cuid())
+  deviceKey     String   @unique // simple auth: browser-generated key
+  name          String?
+  createdAt     DateTime @default(now())
+  folders       Folder[]
+  files         FileEntry[]
+  enrichments   Enrichment[]
+  collections   Collection[]
+  history       ListeningHistory[]
+  tags          Tag[]
 }
