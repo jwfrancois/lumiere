@@ -1,32 +1,33 @@
 /**
  * Library persistence layer.
  *
- * Two storage tiers:
+ * THREE storage tiers:
  *
- * 1. **localStorage** — serializable library data:
+ * 1. **localStorage** — lightweight library data (kept small to avoid quota):
  *    - folder list (id, name, fileCount, scannedAt, hasFsaHandle)
- *    - file manifest (id, name, path, kind, size, folderId — NOT the File object)
+ *    - file manifest (id, name, path, kind, size, folderId)
  *    - raw metadata (title, artist, album, etc. — minus coverUrl blob URLs)
- *    - enrichment (posterUrl, imdbRating, plot, etc.)
  *    - current view
  *
- * 2. **IndexedDB** — `FileSystemDirectoryHandle` objects (one per folder
- *    scanned via the File System Access API). These survive page reloads
- *    and can be re-permissioned with a single user gesture.
+ * 2. **IndexedDB (enrichment store)** — enrichment data (posters, ratings,
+ *    plots, cast, artist bios, album art URLs). This is the largest field
+ *    and would blow localStorage's ~5MB quota with large libraries.
+ *    IndexedDB has 50MB+ quota.
  *
- * On reload, we restore everything from localStorage. Files are marked
- * `unavailable: true` until the user clicks "Reconnect" — at which point
- * we re-permission the FSA handles (or fall back to re-picking folders)
- * and rebuild the `File` + `url` fields.
+ * 3. **IndexedDB (FSA handles)** — FileSystemDirectoryHandle objects.
+ *
+ * On reload, we restore from both localStorage + IndexedDB. Files are marked
+ * `unavailable: true` until the user clicks "Reconnect".
  */
 
 import type { ScannedFile, MediaKind } from './media-scanner'
 import type { MediaMetadata } from './metadata'
 import type { EnrichedInfo, ScannedFolderInfo } from '@/store/library'
 
-const LS_KEY = 'lumiere:library:v1'
+const LS_KEY = 'lumiere:library:v2'
 const IDB_DB = 'lumiere'
 const IDB_STORE = 'fsa-handles'
+const IDB_ENRICHMENT_STORE = 'enrichment'
 
 /* ------------------------- localStorage helpers ------------------------- */
 
@@ -43,29 +44,39 @@ export interface PersistedLibrary {
   }>
   /** Metadata without coverUrl (those are blob: URLs that don't survive reload). */
   rawMetadata: Record<string, Omit<MediaMetadata, 'coverUrl'>>
-  /** OMDB enrichment data — survives intact. */
-  enrichment: Record<string, EnrichedInfo>
   /** Last-viewed tab. */
   currentView: string
   /** Schema version for future migrations. */
-  version: 1
+  version: 2
 }
 
 export function saveLibrary(state: PersistedLibrary): void {
   if (typeof window === 'undefined') return
+  // Enrichment is NOT stored here — it goes to IndexedDB via saveEnrichment().
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(state))
   } catch (err) {
-    // Most likely QuotaExceededError — library too large for localStorage.
-    // In that case, drop the fileManifest (heaviest field) and retry.
-    console.warn('saveLibrary failed, retrying without file manifest', err)
+    // QuotaExceededError — progressively strip data
+    console.warn('saveLibrary: full save failed, trying without fileManifest', err)
     try {
       localStorage.setItem(
         LS_KEY,
         JSON.stringify({ ...state, fileManifest: [] }),
       )
     } catch (err2) {
-      console.error('saveLibrary retry failed', err2)
+      console.warn('saveLibrary: still too large, trying without rawMetadata', err2)
+      try {
+        localStorage.setItem(
+          LS_KEY,
+          JSON.stringify({
+            ...state,
+            fileManifest: [],
+            rawMetadata: {},
+          }),
+        )
+      } catch (err3) {
+        console.error('saveLibrary: all retries failed', err3)
+      }
     }
   }
 }
@@ -74,9 +85,25 @@ export function loadLibrary(): PersistedLibrary | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(LS_KEY)
-    if (!raw) return null
+    if (!raw) {
+      // Try migrating from v1 key
+      const old = localStorage.getItem('lumiere:library:v1')
+      if (old) {
+        const parsed = JSON.parse(old) as PersistedLibrary & {
+          enrichment?: Record<string, EnrichedInfo>
+        }
+        // If old data has enrichment, save it to IndexedDB
+        if (parsed.enrichment && Object.keys(parsed.enrichment).length > 0) {
+          void saveEnrichment(parsed.enrichment)
+        }
+        const { enrichment: _, ...rest } = parsed
+        void _
+        return { ...rest, version: 2 }
+      }
+      return null
+    }
     const parsed = JSON.parse(raw) as PersistedLibrary
-    if (parsed.version !== 1) return null
+    if (parsed.version !== 2) return null
     return parsed
   } catch (err) {
     console.warn('loadLibrary failed', err)
@@ -88,24 +115,35 @@ export function clearLibrary(): void {
   if (typeof window === 'undefined') return
   try {
     localStorage.removeItem(LS_KEY)
+    localStorage.removeItem('lumiere:library:v1')
   } catch {
     /* ignore */
   }
+  // Also clear enrichment from IndexedDB
+  void clearEnrichment()
 }
 
-/* ------------------------- IndexedDB for FSA handles ------------------- */
+/* --------------------- Enrichment IndexedDB storage ------------------- *
+ *
+ * Enrichment data (OMDB plots, cast strings, artist bios, album art URLs)
+ * can be very large — easily 5-10MB for a library of 200+ items. localStorage
+ * has a ~5MB quota, so we store enrichment in IndexedDB which has 50MB+.
+ */
 
-function openIdb(): Promise<IDBDatabase | null> {
+function openIdbWithEnrichment(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') {
       resolve(null)
       return
     }
-    const req = indexedDB.open(IDB_DB, 1)
+    const req = indexedDB.open(IDB_DB, 2)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(IDB_STORE)) {
         db.createObjectStore(IDB_STORE)
+      }
+      if (!db.objectStoreNames.contains(IDB_ENRICHMENT_STORE)) {
+        db.createObjectStore(IDB_ENRICHMENT_STORE)
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -114,6 +152,87 @@ function openIdb(): Promise<IDBDatabase | null> {
       resolve(null)
     }
   })
+}
+
+export async function saveEnrichment(
+  enrichment: Record<string, EnrichedInfo>,
+): Promise<void> {
+  const db = await openIdbWithEnrichment()
+  if (!db) {
+    // Fallback: try localStorage with a separate key (may fail for large data)
+    try {
+      localStorage.setItem('lumiere:enrichment', JSON.stringify(enrichment))
+    } catch {
+      console.warn('saveEnrichment: localStorage fallback also failed')
+    }
+    return
+  }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readwrite')
+      // Clear old data and store new
+      tx.objectStore(IDB_ENRICHMENT_STORE).clear()
+      tx.objectStore(IDB_ENRICHMENT_STORE).put(
+        enrichment,
+        'all',
+      )
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => {
+        console.warn('saveEnrichment IDB failed', tx.error)
+        resolve()
+      }
+    } catch {
+      resolve()
+    }
+  })
+}
+
+export async function loadEnrichment(): Promise<
+  Record<string, EnrichedInfo> | null
+> {
+  const db = await openIdbWithEnrichment()
+  if (!db) {
+    // Fallback: try localStorage
+    try {
+      const raw = localStorage.getItem('lumiere:enrichment')
+      if (raw) return JSON.parse(raw)
+    } catch {
+      /* ignore */
+    }
+    return null
+  }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readonly')
+      const req = tx.objectStore(IDB_ENRICHMENT_STORE).get('all')
+      req.onsuccess = () => resolve(req.result || null)
+      req.onerror = () => resolve(null)
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+export async function clearEnrichment(): Promise<void> {
+  const db = await openIdbWithEnrichment()
+  if (!db) return
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_ENRICHMENT_STORE, 'readwrite')
+      tx.objectStore(IDB_ENRICHMENT_STORE).clear()
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => resolve()
+    } catch {
+      resolve()
+    }
+  })
+}
+
+/* ------------------------- IndexedDB for FSA handles ------------------- */
+
+function openIdb(): Promise<IDBDatabase | null> {
+  // Reuse openIdbWithEnrichment — it creates both object stores at version 2.
+  return openIdbWithEnrichment()
 }
 
 export async function saveFsaHandle(

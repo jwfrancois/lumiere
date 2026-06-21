@@ -24,6 +24,8 @@ import {
   saveLibrary,
   loadLibrary,
   clearLibrary,
+  saveEnrichment,
+  loadEnrichment,
   saveFsaHandle,
   deleteFsaHandle,
   getAllFsaHandles,
@@ -258,11 +260,12 @@ function applyPersistedData() {
   }))
   const result = categorizeFiles(input)
 
+  // Enrichment is NOT in persisted (it's in IndexedDB now).
+  // It will be loaded async in hydrateFromStorage().
   useLibrary.setState({
     scannedFiles: files,
     rawMetadata,
     scannedFolders: folders,
-    enrichment: persisted.enrichment,
     currentView: (persisted.currentView as ViewName) || 'home',
     movies: result.movies,
     collections: result.collections,
@@ -451,17 +454,24 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
   hydrateFromStorage: () => {
     // Only run on client — loadLibrary() returns null on server.
-    // Safe to call multiple times; if there's no persisted data, it's a no-op.
     applyPersistedData()
-    // Also load listening history + tags from their own localStorage keys.
+    // Load listening history + tags from localStorage.
     set({
       listeningHistory: loadHistory(),
       tagState: loadTags(),
+    })
+    // Load enrichment from IndexedDB (async — the UI will update when
+    // it resolves; enrichment data appears progressively after reload).
+    void loadEnrichment().then((enrich) => {
+      if (enrich && Object.keys(enrich).length > 0) {
+        set({ enrichment })
+      }
     })
   },
 
   persist: () => {
     const s = get()
+    // Save lightweight library data to localStorage (no enrichment — too large)
     saveLibrary({
       scannedFolders: s.scannedFolders.map((f) => ({
         id: f.id,
@@ -469,7 +479,6 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         fileCount: f.fileCount,
         scannedAt: f.scannedAt,
         hasFsaHandle: f.hasFsaHandle,
-        // Don't persist `connected` — always starts as false on reload
       })),
       fileManifest: s.scannedFiles.map((f) => ({
         id: f.id,
@@ -480,10 +489,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         folderId: f.folderId,
       })),
       rawMetadata: stripCoverUrl(s.rawMetadata),
-      enrichment: s.enrichment,
       currentView: s.currentView,
-      version: 1,
+      version: 2,
     })
+    // Save enrichment to IndexedDB (50MB+ quota, handles large data)
+    void saveEnrichment(s.enrichment)
   },
 
   reconnectAllFolders: async () => {
