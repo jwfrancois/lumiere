@@ -455,6 +455,28 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   hydrateFromStorage: () => {
     // Only run on client — loadLibrary() returns null on server.
     applyPersistedData()
+
+    // Integrity check: if no library data was loaded but backups exist,
+    // log a warning so the user knows data may have been lost.
+    if (
+      get().scannedFiles.length === 0 &&
+      typeof window !== 'undefined'
+    ) {
+      const hasBackup =
+        localStorage.getItem('lumiere:library:v2:bak1') ||
+        localStorage.getItem('lumiere:library:v2:bak2') ||
+        localStorage.getItem('lumiere:library:v2:bak3') ||
+        localStorage.getItem('lumiere:library:v2:prev') ||
+        localStorage.getItem('lumiere:library:v1')
+      if (hasBackup) {
+        console.warn(
+          '[store] No primary library data found, but backups exist. ' +
+            'The loadLibrary() function should have recovered from backups. ' +
+            'If you see this message, check browser console for details.'
+        )
+      }
+    }
+
     // Load listening history + tags from localStorage.
     set({
       listeningHistory: loadHistory(),
@@ -472,7 +494,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   persist: () => {
     const s = get()
     // Save lightweight library data to localStorage (no enrichment — too large)
-    saveLibrary({
+    const ok = saveLibrary({
       scannedFolders: s.scannedFolders.map((f) => ({
         id: f.id,
         name: f.name,
@@ -491,7 +513,12 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       rawMetadata: stripCoverUrl(s.rawMetadata),
       currentView: s.currentView,
       version: 2,
+      savedAt: Date.now(),
     })
+    if (!ok) {
+      console.error('[store] persist() failed — library data may not be saved. ' +
+        'Backups are intact. Try freeing up browser storage space.')
+    }
     // Save enrichment to IndexedDB (50MB+ quota, handles large data)
     void saveEnrichment(s.enrichment)
   },
