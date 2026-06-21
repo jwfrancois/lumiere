@@ -254,12 +254,35 @@ export function CollectionsEmptyState({
       <h3 className="text-lg font-bold mb-2">No collections yet</h3>
       <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
         Collections group related movies together — perfect for franchises,
-        trilogies, and series. Lumière auto-detects collections from
-        filenames with sequel numbers (e.g. <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Movie 2</code>,{' '}
-        <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Movie II</code>) or
-        shared prefixes (e.g. <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Lord of the Rings…</code>).
-        You can also create them manually.
+        trilogies, and series. Lumière auto-detects collections using three
+        strategies:
       </p>
+      <div className="text-left max-w-md mx-auto mb-6 space-y-2">
+        <div className="flex items-start gap-2 text-sm">
+          <span className="text-[var(--accent)] font-bold shrink-0">1.</span>
+          <span className="text-muted-foreground">
+            <strong className="text-foreground">Folder structure</strong> —
+            movies in the same subfolder (e.g.{' '}
+            <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Star Wars/</code>) form a collection
+          </span>
+        </div>
+        <div className="flex items-start gap-2 text-sm">
+          <span className="text-[var(--accent)] font-bold shrink-0">2.</span>
+          <span className="text-muted-foreground">
+            <strong className="text-foreground">Shared name prefix</strong> —
+            movies sharing their first 2+ words (e.g.{' '}
+            <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Die Hard</code>,{' '}
+            <code className="px-1 py-0.5 rounded bg-muted text-amber-300 text-xs">Die Hard 2</code>)
+          </span>
+        </div>
+        <div className="flex items-start gap-2 text-sm">
+          <span className="text-[var(--accent)] font-bold shrink-0">3.</span>
+          <span className="text-muted-foreground">
+            <strong className="text-foreground">Manual creation</strong> —
+            group any movies yourself
+          </span>
+        </div>
+      </div>
       {hasMovies ? (
         <Button
           onClick={onCreate}

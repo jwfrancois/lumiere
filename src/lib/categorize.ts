@@ -423,50 +423,131 @@ export function categorizeFiles(
     pod.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber)
   }
 
-  // Detect movie collections using a unified shared-prefix clustering
-  // algorithm. We try the SHORTEST prefix first (3 words) to capture the
-  // largest possible group, then progressively longer prefixes for any
-  // remaining movies.
+  // Detect movie collections using THREE complementary strategies:
   //
-  // This catches both numbered sequels and subtitle-based sequels:
-  //   "Lord of the Rings - Fellowship 1"
-  //   "Lord of the Rings - Two Towers 2"
-  //   "Lord of the Rings - Return of the King 3"
-  //   → groups at prefix 3 "lord of the"
+  // Strategy 1: Path-based clustering (HIGHEST confidence)
+  //   Movies in the same subfolder are likely a franchise/collection.
+  //   e.g. "Star Wars/A New Hope.mp4", "Star Wars/Empire Strikes Back.mp4"
+  //   → collection "Star Wars"
+  //   Genre-word folders ("Action", "Comedy") are blacklisted.
   //
-  //   "The Hunger Games"
-  //   "The Hunger Games Catching Fire"
-  //   "The Hunger Games Mockingjay Part 1"
-  //   "The Hunger Games Mockingjay Part 2"
-  //   → groups at prefix 3 "the hunger games"
+  // Strategy 2: 2-word shared prefix (HIGH confidence)
+  //   Movies sharing their first 2 normalized words form a collection.
+  //   e.g. "Die Hard", "Die Hard 2", "Die Hard With a Vengeance"
+  //   e.g. "The Matrix", "The Matrix Reloaded", "The Matrix Revolutions"
+  //   e.g. "Bad Boys", "Bad Boys II", "Bad Boys for Life"
   //
-  //   "Star Wars A New Hope"
-  //   "Star Wars The Empire Strikes Back"
-  //   "Star Wars Return of the Jedi"
-  //   → does NOT group (word 3 differs: "a" vs "the" vs "return")
-  //     — user can create this collection manually
+  // Strategy 3: 3+ word shared prefix (MEDIUM confidence)
+  //   For longer franchise names that share 3-5 words.
+  //   e.g. "Lord of the Rings Fellowship", "Lord of the Rings Two Towers"
+  //
+  // All three strategies are tried in order. Once a movie is grouped,
+  // it can't join another collection.
+
+  // Genre / non-franchise folder names that shouldn't form collections
+  const NON_FRANCHISE_WORDS = new Set([
+    'action', 'adventure', 'animation', 'anime', 'biography',
+    'comedy', 'crime', 'documentary', 'drama', 'family',
+    'fantasy', 'history', 'horror', 'kids', 'musical',
+    'mystery', 'romance', 'sci-fi', 'scifi', 'science fiction',
+    'short', 'sport', 'thriller', 'war', 'western',
+    'movies', 'movie', 'films', 'film', 'videos', 'video',
+    'media', 'new', 'favorites', 'favourite', 'favorite',
+    'watched', 'unwatched', 'unsorted', 'misc', 'other',
+    'tv', 'shows', 'series', 'music', 'podcasts', 'audiobooks',
+    '1080p', '720p', '4k', 'uhd', 'blu-ray', 'bluray',
+  ])
+
   type MovieWithKey = {
     movie: MovieItem
     sequel: number
     words: string[]
     normalized: string
+    /** Parent folder name (if file is in a subfolder below scan root). */
+    folder?: string
   }
+
   const allMoviesWithKeys: MovieWithKey[] = []
   for (const movie of movies) {
     const normalized = normalizeTitle(movie.title)
     const sequel = parseSequelNumber(normalized) ?? 0
     const stripped = stripSequelNumber(normalized)
     const words = stripped.split(/\s+/).filter(Boolean)
-    if (words.length < 2) continue
-    allMoviesWithKeys.push({ movie, sequel, words, normalized })
+    if (words.length < 1) continue
+    // Extract parent folder from the file path
+    // Path format: "FolderName/subfolder/file.mp4" or "file.mp4"
+    const pathParts = movie.file.path.split('/')
+    let folder: string | undefined
+    if (pathParts.length >= 2) {
+      // Use the immediate parent folder
+      folder = pathParts[pathParts.length - 2]
+    }
+    allMoviesWithKeys.push({ movie, sequel, words, normalized, folder })
   }
 
   const collectionMap = new Map<string, MovieWithKey[]>()
   const used = new Set<string>()
 
-  // Try prefix lengths from 3 (shortest, most inclusive) up to 5.
-  // At each level, group all remaining movies that share that prefix.
-  // Once a group is formed, its members are locked in.
+  // --- Strategy 1: Path-based clustering ---
+  // Group movies by parent folder. If 2+ movies share a folder AND the
+  // folder name isn't a genre/common word, they form a collection.
+  // Store original folder name for the title (preserve casing).
+  const byFolder = new Map<string, { items: MovieWithKey[]; displayName: string }>()
+  for (const item of allMoviesWithKeys) {
+    if (!item.folder) continue
+    if (used.has(item.movie.id)) continue
+    const folderLower = item.folder.toLowerCase().trim()
+    // Skip single-word genre folders
+    if (NON_FRANCHISE_WORDS.has(folderLower)) continue
+    // Skip folders that are just a year
+    if (/^\d{4}$/.test(folderLower)) continue
+    // Skip very short folder names (1-2 chars)
+    if (folderLower.length < 3) continue
+    const existing = byFolder.get(folderLower)
+    if (existing) {
+      existing.items.push(item)
+    } else {
+      byFolder.set(folderLower, { items: [item], displayName: item.folder })
+    }
+  }
+  for (const [, { items: group, displayName }] of byFolder.entries()) {
+    if (group.length >= 2) {
+      // Use the folder display name as the key, but also try shared prefix
+      // of the movie titles for a potentially cleaner name
+      const titles = group.map((g) => g.normalized)
+      const shared = sharedPrefix(titles)
+      const finalKey = shared || displayName
+      collectionMap.set(finalKey, group)
+      for (const g of group) used.add(g.movie.id)
+    }
+  }
+
+  // --- Strategy 2: 2-word shared prefix ---
+  // Catches franchises like "Die Hard", "Bad Boys", "The Matrix".
+  for (const item of allMoviesWithKeys) {
+    if (used.has(item.movie.id)) continue
+    if (item.words.length < 2) continue
+    const key = item.words.slice(0, 2).join(' ')
+    const group = allMoviesWithKeys.filter(
+      (o) =>
+        !used.has(o.movie.id) &&
+        o.words.length >= 2 &&
+        o.words.slice(0, 2).join(' ') === key,
+    )
+    if (group.length >= 2) {
+      // Use the longest shared prefix as the collection title
+      const titles = group.map((g) => g.normalized)
+      const shared = sharedPrefix(titles)
+      const finalKey = shared || key
+      if (!collectionMap.has(finalKey)) {
+        collectionMap.set(finalKey, group)
+        for (const g of group) used.add(g.movie.id)
+      }
+    }
+  }
+
+  // --- Strategy 3: 3-5 word shared prefix ---
+  // For remaining ungrouped movies with longer franchise names.
   for (let prefixLen = 3; prefixLen <= 5; prefixLen++) {
     for (const item of allMoviesWithKeys) {
       if (used.has(item.movie.id)) continue
@@ -479,9 +560,6 @@ export function categorizeFiles(
           o.words.slice(0, prefixLen).join(' ') === key,
       )
       if (group.length >= 2) {
-        // Use the longest shared prefix across the group as the key.
-        // This gives a cleaner collection title (e.g. "The Hunger Games"
-        // instead of "The Hunger").
         const titles = group.map((g) => g.normalized)
         const shared = sharedPrefix(titles)
         const finalKey = shared || key

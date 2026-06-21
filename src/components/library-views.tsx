@@ -25,6 +25,7 @@ import {
   Trophy,
   PlayCircle,
   Plus,
+  RefreshCw,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -722,6 +723,7 @@ export function CollectionsView() {
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
   const moviesById = useMoviesByIdMap()
+  const rederive = useLibrary((s) => s.rederive)
   const [query, setQuery] = useState('')
   const [managerOpen, setManagerOpen] = useState(false)
 
@@ -755,12 +757,22 @@ export function CollectionsView() {
         <div className="flex items-center justify-between mb-5 px-6 md:px-8">
           <h1 className="text-2xl font-bold tracking-tight">Collections</h1>
           {hasMovies && (
-            <Button
-              onClick={() => setManagerOpen(true)}
-              className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold"
-            >
-              <Plus className="w-4 h-4" /> Create Collection
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => rederive()}
+                className="text-muted-foreground hover:text-foreground"
+                title="Re-run auto-detection"
+              >
+                <RefreshCw className="w-4 h-4" /> Re-detect
+              </Button>
+              <Button
+                onClick={() => setManagerOpen(true)}
+                className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold"
+              >
+                <Plus className="w-4 h-4" /> Create Collection
+              </Button>
+            </div>
           )}
         </div>
         <CollectionsEmptyState
@@ -792,12 +804,22 @@ export function CollectionsView() {
           />
         </div>
         {hasMovies && (
-          <Button
-            onClick={() => setManagerOpen(true)}
-            className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold shrink-0"
-          >
-            <Plus className="w-4 h-4" /> New
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              onClick={() => rederive()}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              title="Re-run auto-detection using folder structure and movie titles"
+            >
+              <RefreshCw className="w-4 h-4" /> Re-detect
+            </Button>
+            <Button
+              onClick={() => setManagerOpen(true)}
+              className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-semibold shrink-0"
+            >
+              <Plus className="w-4 h-4" /> New
+            </Button>
+          </>
         )}
       </div>
       <NetflixRail title={`Collections (${filtered.length})`}>
