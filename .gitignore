@@ -52,3 +52,9 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Lumière project-specific
+/scripts/  # Test injection scripts (dev only)
+/upload/   # Uploaded reference images
+/worklog.md
+/.zscripts/
