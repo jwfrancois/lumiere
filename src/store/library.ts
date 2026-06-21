@@ -464,7 +464,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     // it resolves; enrichment data appears progressively after reload).
     void loadEnrichment().then((enrich) => {
       if (enrich && Object.keys(enrich).length > 0) {
-        set({ enrichment })
+        set({ enrichment: enrich })
       }
     })
   },
