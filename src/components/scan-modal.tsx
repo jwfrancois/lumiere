@@ -148,27 +148,56 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
     }
     setPhase('extracting')
     setTotalToExtract(files.length)
-    const metadata: Record<string, Awaited<ReturnType<typeof extractMetadata>>> = {}
-    // Extract metadata in parallel batches of 6
-    const BATCH = 6
-    for (let i = 0; i < files.length; i += BATCH) {
-      const batch = files.slice(i, i + BATCH)
-      await Promise.all(
-        batch.map(async (f) => {
-          try {
-            const md = await extractMetadata(f.file)
-            metadata[f.id] = md
-          } catch (err) {
-            console.warn('Failed to extract metadata for', f.name, err)
-            metadata[f.id] = { title: f.name.replace(/\.[^.]+$/, '') }
-          }
-        }),
+
+    // Process files in CHUNKS to avoid memory buildup.
+    // Extract metadata for a chunk, immediately add to store (which
+    // persists to IndexedDB), then clear the chunk's metadata to free
+    // memory before processing the next chunk.
+    //
+    // CRITICAL: extractMetadata(file, true) uses fast mode which skips
+    // probeDuration() — that function creates <audio>/<video> elements
+    // with object URLs for EVERY file, causing out-of-memory crashes
+    // when scanning hundreds of podcast episodes.
+    const CHUNK_SIZE = 25
+
+    for (let chunkStart = 0; chunkStart < files.length; chunkStart += CHUNK_SIZE) {
+      const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, files.length)
+      const chunk = files.slice(chunkStart, chunkEnd)
+      const chunkMetadata: Record<string, Awaited<ReturnType<typeof extractMetadata>>> = {}
+
+      // Extract metadata for this chunk — ONE FILE AT A TIME
+      for (let i = 0; i < chunk.length; i++) {
+        const f = chunk[i]
+        try {
+          // fast=true skips probeDuration (no media elements created)
+          const md = await extractMetadata(f.file, true)
+          chunkMetadata[f.id] = md
+        } catch (err) {
+          console.warn('Failed to extract metadata for', f.name, err)
+          chunkMetadata[f.id] = { title: f.name.replace(/\.[^.]+$/, '') }
+        }
+        setExtracted(chunkStart + i + 1)
+        // Yield between files for GC
+        await new Promise((r) => setTimeout(r, 0))
+      }
+
+      // Add this chunk to the store immediately (persists to IndexedDB)
+      // Only pass folderName/fsaHandle on the FIRST chunk
+      const isFirstChunk = chunkStart === 0
+      addFiles(
+        chunk,
+        chunkMetadata,
+        isFirstChunk ? folderName : undefined,
+        folderId,
+        isFirstChunk ? fsaHandle : null,
       )
-      setExtracted(Math.min(i + BATCH, files.length))
-      // Yield to UI
-      await new Promise((r) => setTimeout(r, 0))
+
+      // Clear chunk data to free memory before next chunk
+      chunk.length = 0
+      for (const key of Object.keys(chunkMetadata)) {
+        delete chunkMetadata[key]
+      }
     }
-    addFiles(files, metadata, folderName, folderId, fsaHandle)
     setScanning(false)
     setPhase('done')
     toast.success(

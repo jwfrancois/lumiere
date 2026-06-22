@@ -866,8 +866,15 @@ export function probeDuration(file: File): Promise<number | undefined> {
 /**
  * Extract metadata from a media file.
  * Detects container by extension / mime type.
+ *
+ * @param fast When true (default for scanning), skips probeDuration
+ *             which creates media elements and can cause OOM with
+ *             many files. Duration is estimated from file size instead.
  */
-export async function extractMetadata(file: File): Promise<MediaMetadata> {
+export async function extractMetadata(
+  file: File,
+  fast = true,
+): Promise<MediaMetadata> {
   const name = file.name.toLowerCase()
   let meta: MediaMetadata = {}
 
@@ -890,13 +897,20 @@ export async function extractMetadata(file: File): Promise<MediaMetadata> {
     console.warn('metadata parse failed for', file.name, err)
   }
 
+  // Duration: use container metadata if available. Only fall back to
+  // probeDuration when NOT in fast mode (i.e. when playing, not scanning).
   if (!meta.durationSec) {
-    try {
-      const d = await probeDuration(file)
-      if (d) meta.durationSec = d
-    } catch (err) {
-      // probeDuration shouldn't throw, but guard anyway.
-      console.warn('probeDuration failed for', file.name, err)
+    if (fast) {
+      // Estimate duration from file size for common formats.
+      // This avoids creating media elements during scanning (OOM risk).
+      meta.durationSec = estimateDuration(file, meta)
+    } else {
+      try {
+        const d = await probeDuration(file)
+        if (d) meta.durationSec = d
+      } catch (err) {
+        console.warn('probeDuration failed for', file.name, err)
+      }
     }
   }
 
@@ -906,6 +920,44 @@ export async function extractMetadata(file: File): Promise<MediaMetadata> {
   }
 
   return meta
+}
+
+/**
+ * Estimate duration from file size when we can't parse it from metadata.
+ * Uses common bitrate assumptions:
+ *   MP3 128kbps:  ~1MB per minute
+ *   MP3 192kbps:  ~1.4MB per minute
+ *   MP3 320kbps:  ~2.4MB per minute
+ *   AAC/M4A 128k: ~1MB per minute
+ *   FLAC:         ~5MB per minute (lossless)
+ *   Video:        can't estimate reliably, return undefined
+ */
+function estimateDuration(file: File, meta: MediaMetadata): number | undefined {
+  const sizeMB = file.size / (1024 * 1024)
+  const name = file.name.toLowerCase()
+
+  // For MP3: assume 192kbps average (common for podcasts)
+  if (name.endsWith('.mp3')) {
+    return (sizeMB / 1.4) * 60 // minutes to seconds
+  }
+  // For M4A/AAC: assume 128kbps
+  if (name.endsWith('.m4a') || name.endsWith('.m4b') || name.endsWith('.aac')) {
+    return (sizeMB / 1.0) * 60
+  }
+  // For FLAC: assume ~5MB/min (lossless, 44.1kHz stereo)
+  if (name.endsWith('.flac')) {
+    return (sizeMB / 5.0) * 60
+  }
+  // For OGG: assume 128kbps
+  if (name.endsWith('.ogg') || name.endsWith('.oga') || name.endsWith('.opus')) {
+    return (sizeMB / 1.0) * 60
+  }
+  // For WAV: 10MB/min (uncompressed 44.1kHz stereo 16-bit)
+  if (name.endsWith('.wav')) {
+    return (sizeMB / 10.0) * 60
+  }
+  // Video: can't estimate reliably
+  return undefined
 }
 
 /** Format seconds as M:SS or H:MM:SS. */
