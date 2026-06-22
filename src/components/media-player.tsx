@@ -584,53 +584,190 @@ export function MediaPlayer() {
               playsInline
             />
           ) : (
-            <div className="relative w-full h-full flex items-center justify-center p-8">
-              {/* Animated backdrop blur from cover */}
-              {currentItem.metadata.coverUrl && (
+            <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
+              {/* ── DUAL WALLPAPER BACKGROUND ─────────────────────────── */}
+              {/* Left side: album/podcast cover art (blurred, vibrant) */}
+              {/* Right side: gramophone photo (darkened, vintage)        */}
+              {/* Center: smooth blend where the two meet                 */}
+              <div className="absolute inset-0">
+                {/* Left half — album art wallpaper */}
                 <div
-                  className="absolute inset-0 bg-cover bg-center opacity-40 blur-3xl scale-110"
-                  style={{ backgroundImage: `url(${currentItem.metadata.coverUrl})` }}
-                />
-              )}
-              <div className="relative z-10 flex flex-col items-center gap-6 max-w-md">
-                <div
-                  className={cn(
-                    'relative aspect-square w-64 md:w-80 rounded-2xl overflow-hidden shadow-2xl shadow-amber-500/10 border border-white/10',
-                    state.isPlaying && 'animate-spin-slow',
-                  )}
+                  className="absolute inset-y-0 left-0 w-3/5 bg-cover bg-center"
                   style={{
-                    borderRadius: '50%',
-                    backgroundImage:
-                      'radial-gradient(circle at center, #1a1a1a 0%, #1a1a1a 28%, transparent 28%), repeating-radial-gradient(circle at center, #1a1a1a 0, #1a1a1a 2px, #0a0a0a 3px, #0a0a0a 4px)',
+                    backgroundImage: currentItem.metadata.coverUrl
+                      ? `url(${currentItem.metadata.coverUrl})`
+                      : 'linear-gradient(135deg, #1a0a2e, #16213e, #0f3460)',
+                    filter: 'saturate(1.4) brightness(0.35)',
                   }}
-                >
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    {currentItem.metadata.coverUrl ? (
-                      <img
-                        src={currentItem.metadata.coverUrl}
-                        alt={currentItem.title}
-                        className="w-1/2 h-1/2 rounded-full object-cover border-4 border-black shadow-2xl"
-                      />
-                    ) : (
-                      <div className="w-1/2 h-1/2 rounded-full bg-gradient-to-br from-amber-500 to-rose-500 flex items-center justify-center text-black font-bold">
-                        ♪
-                      </div>
-                    )}
-                  </div>
+                />
+                {/* Right half — gramophone photo */}
+                <div
+                  className="absolute inset-y-0 right-0 w-3/5 bg-cover bg-center"
+                  style={{
+                    backgroundImage: 'url(/gramophone.jpeg)',
+                    filter: 'brightness(0.3) sepia(0.3) saturate(0.8)',
+                  }}
+                />
+                {/* Center blend — gradient mask that smoothly transitions
+                    left wallpaper into right wallpaper */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background:
+                      'linear-gradient(90deg, \
+                        rgba(0,0,0,0) 0%, \
+                        rgba(0,0,0,0) 35%, \
+                        rgba(0,0,0,0.6) 45%, \
+                        rgba(0,0,0,0.85) 50%, \
+                        rgba(0,0,0,0.6) 55%, \
+                        rgba(0,0,0,0) 65%, \
+                        rgba(0,0,0,0) 100%)',
+                  }}
+                />
+                {/* Top + bottom vignette for depth */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/50" />
+                {/* Warm amber glow from center (futuristic lamp effect) */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background:
+                      'radial-gradient(ellipse 50% 40% at 50% 50%, rgba(251,191,36,0.15) 0%, transparent 70%)',
+                    animation: 'hero-sweep 6s ease-in-out infinite',
+                  }}
+                />
+                {/* Floating particles effect (CSS-only, no JS) */}
+                <div className="absolute inset-0 pointer-events-none">
+                  {[...Array(12)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="absolute rounded-full"
+                      style={{
+                        width: `${2 + (i % 3)}px`,
+                        height: `${2 + (i % 3)}px`,
+                        left: `${10 + (i * 7) % 80}%`,
+                        top: `${15 + (i * 13) % 70}%`,
+                        background:
+                          i % 3 === 0
+                            ? 'rgba(251,191,36,0.6)'
+                            : i % 3 === 1
+                              ? 'rgba(244,63,94,0.4)'
+                              : 'rgba(255,255,255,0.3)',
+                        animation: `hero-sweep ${4 + (i % 4)}s ease-in-out infinite`,
+                        animationDelay: `${i * 0.4}s`,
+                        filter: 'blur(0.5px)',
+                      }}
+                    />
+                  ))}
                 </div>
+              </div>
+
+              {/* ── SPINNING VINYL + TRACK INFO ──────────────────────── */}
+              <div className="relative z-10 flex flex-col items-center gap-6 max-w-md">
+                {/* Vinyl record with album art center label */}
+                <div className="relative">
+                  <div
+                    className={cn(
+                      'relative w-64 h-64 md:w-80 md:h-80 rounded-full overflow-hidden shadow-2xl',
+                      state.isPlaying && 'animate-spin-slow',
+                    )}
+                    style={{
+                      backgroundImage:
+                        'radial-gradient(circle at center, #1a1a1a 0%, #1a1a1a 28%, transparent 28%), repeating-radial-gradient(circle at center, #1a1a1a 0, #1a1a1a 2px, #0a0a0a 3px, #0a0a0a 4px)',
+                    }}
+                  >
+                    {/* Groove shine — conic gradient simulating light reflection */}
+                    <div
+                      className="absolute inset-0 rounded-full pointer-events-none"
+                      style={{
+                        background:
+                          'conic-gradient(from 0deg, transparent 0deg, rgba(255,255,255,0.08) 30deg, transparent 60deg, transparent 180deg, rgba(255,255,255,0.04) 210deg, transparent 240deg)',
+                      }}
+                    />
+                    {/* Center label = album art */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      {currentItem.metadata.coverUrl ? (
+                        <img
+                          src={currentItem.metadata.coverUrl}
+                          alt={currentItem.title}
+                          className="w-1/2 h-1/2 rounded-full object-cover border-4 border-black shadow-2xl"
+                        />
+                      ) : (
+                        <div className="w-1/2 h-1/2 rounded-full bg-gradient-to-br from-amber-500 to-rose-500 flex items-center justify-center text-black font-bold text-2xl">
+                          ♪
+                        </div>
+                      )}
+                    </div>
+                    {/* Center spindle hole */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-black border border-white/20" />
+                  </div>
+
+                  {/* Tonearm — rotates to playing position when active */}
+                  <div
+                    className="absolute -top-6 -right-4 w-36 h-36 pointer-events-none"
+                    style={{
+                      transform: state.isPlaying ? 'rotate(22deg)' : 'rotate(-8deg)',
+                      transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+                    }}
+                  >
+                    <svg viewBox="0 0 100 100" className="w-full h-full opacity-50">
+                      {/* Tonearm pivot base */}
+                      <circle cx="88" cy="12" r="9" fill="#555" stroke="#777" strokeWidth="1" />
+                      <circle cx="88" cy="12" r="4" fill="#333" />
+                      <circle cx="88" cy="12" r="2" fill="#999" />
+                      {/* Tonearm arm — gradient for metallic look */}
+                      <defs>
+                        <linearGradient id="armGrad" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%" stopColor="#888" />
+                          <stop offset="50%" stopColor="#bbb" />
+                          <stop offset="100%" stopColor="#666" />
+                        </linearGradient>
+                      </defs>
+                      <line x1="88" y1="12" x2="35" y2="58" stroke="url(#armGrad)" strokeWidth="3.5" strokeLinecap="round" />
+                      {/* Headshell + cartridge */}
+                      <rect x="29" y="53" width="12" height="9" rx="2" fill="#444" transform="rotate(35 35 58)" />
+                      <circle cx="33" cy="56" r="1.5" fill="#cc9" />
+                    </svg>
+                  </div>
+
+                  {/* Glow ring around vinyl when playing */}
+                  {state.isPlaying && (
+                    <div
+                      className="absolute inset-0 rounded-full pointer-events-none"
+                      style={{
+                        boxShadow:
+                          '0 0 60px rgba(251,191,36,0.2), 0 0 120px rgba(244,63,94,0.1)',
+                        animation: 'hero-sweep 4s ease-in-out infinite',
+                      }}
+                    />
+                  )}
+                </div>
+
+                {/* Track info with futuristic glow */}
                 <div className="text-center">
-                  <div className="text-xl font-bold">{currentItem.title}</div>
+                  <div
+                    className="text-xl font-bold text-white"
+                    style={{ textShadow: '0 0 20px rgba(251,191,36,0.4), 0 2px 8px rgba(0,0,0,0.8)' }}
+                  >
+                    {currentItem.title}
+                  </div>
                   {currentItem.subtitle && (
-                    <div className="text-sm text-muted-foreground mt-1">
+                    <div
+                      className="text-sm text-white/70 mt-1"
+                      style={{ textShadow: '0 2px 6px rgba(0,0,0,0.8)' }}
+                    >
                       {currentItem.subtitle}
                     </div>
                   )}
                   {currentItem.metadata.album && (
-                    <div className="text-xs text-amber-300/80 mt-0.5">
+                    <div
+                      className="text-xs text-amber-300/80 mt-0.5"
+                      style={{ textShadow: '0 0 12px rgba(251,191,36,0.3)' }}
+                    >
                       {currentItem.metadata.album}
                     </div>
                   )}
                 </div>
+
                 {/* Visualizer */}
                 <canvas
                   ref={canvasRef}
