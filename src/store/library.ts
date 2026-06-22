@@ -178,7 +178,7 @@ interface LibraryState {
   clearEnriching: (key: string) => void
   setIsEnriching: (s: boolean) => void
   // Persistence + reconnect actions
-  persist: () => void
+  persist: () => Promise<void>
   /** Load persisted library from localStorage. Must be called client-side only,
    * after hydration, to avoid SSR mismatches. */
   hydrateFromStorage: () => void
@@ -222,11 +222,23 @@ interface LibraryState {
 /* ----------------------- persistence debounce ------------------------ */
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
+let pendingPersistPromise: Promise<void> = Promise.resolve()
+
 function schedulePersist() {
   if (persistTimer) clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
-    useLibrary.getState().persist()
-  }, 400)
+    pendingPersistPromise = useLibrary.getState().persist()
+  }, 500)
+}
+
+/** Force an immediate persist (skips debounce) and await it. */
+export async function flushPersist(): Promise<void> {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  pendingPersistPromise = useLibrary.getState().persist()
+  await pendingPersistPromise
 }
 
 /* ----------------------- hydration from disk ------------------------- *
@@ -330,7 +342,23 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const taggedFiles = folderId
       ? files.map((f) => ({ ...f, folderId }))
       : files
-    const allFiles = [...existingFiles, ...taggedFiles]
+
+    // DEDUPLICATE: If a file with the same path already exists in the
+    // store (e.g. user re-scanned the same folder), replace the old
+    // entry instead of adding a duplicate. This prevents tracks from
+    // being tripled when the same folder is scanned multiple times.
+    const existingPaths = new Set(existingFiles.map((f) => f.path))
+    const newFiles = taggedFiles.filter((f) => !existingPaths.has(f.path))
+    // For files that already exist (same path), update their metadata
+    // and File object in place
+    const updatedExisting = existingFiles.map((f) => {
+      const replacement = taggedFiles.find((tf) => tf.path === f.path)
+      if (replacement) {
+        return { ...replacement, id: f.id } // keep original ID
+      }
+      return f
+    })
+    const allFiles = [...updatedExisting, ...newFiles]
     const allMeta = { ...existingMeta, ...metadata }
     const input = allFiles.map((f) => ({
       file: f,
@@ -499,10 +527,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     })
   },
 
-  persist: () => {
+  persist: async () => {
     const s = get()
-    // Save lightweight library data to localStorage (no enrichment — too large)
-    const ok = saveLibrary({
+    // Save library data to IndexedDB and AWAIT the write to complete.
+    // This ensures data is persisted before the page unloads.
+    const ok = await saveLibrary({
       scannedFolders: s.scannedFolders.map((f) => ({
         id: f.id,
         name: f.name,
@@ -524,11 +553,10 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       savedAt: Date.now(),
     })
     if (!ok) {
-      console.error('[store] persist() failed — library data may not be saved. ' +
-        'Backups are intact. Try freeing up browser storage space.')
+      console.error('[store] persist() failed — library data may not be saved.')
     }
-    // Save enrichment to IndexedDB (50MB+ quota, handles large data)
-    void saveEnrichment(s.enrichment)
+    // Save enrichment to IndexedDB
+    await saveEnrichment(s.enrichment)
   },
 
   reconnectAllFolders: async () => {

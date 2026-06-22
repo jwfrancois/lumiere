@@ -163,15 +163,28 @@ function idbClear(storeName: string): Promise<void> {
 
 // ── Library save/load (IndexedDB) ───────────────────────────────────────
 
-export function saveLibrary(state: PersistedLibrary): boolean {
-  if (typeof window === 'undefined') return false
+/**
+ * Track pending saves so we can flush them before the page unloads.
+ */
+let pendingSavePromise: Promise<boolean> = Promise.resolve(true)
+
+/** Flush all pending saves — called on beforeunload. */
+export async function flushPendingSaves(): Promise<void> {
+  await pendingSavePromise
+}
+
+/**
+ * Save library to IndexedDB. Returns a Promise that resolves when
+ * the write is confirmed complete. The caller should await this
+ * to ensure data is persisted before the page unloads.
+ */
+export function saveLibrary(state: PersistedLibrary): Promise<boolean> {
+  if (typeof window === 'undefined') return Promise.resolve(false)
   const data = { ...state, savedAt: Date.now() }
-  // Fire-and-forget async write — returns true optimistically.
-  // The write is verified inside idbPut; if it fails, the error is logged
-  // and the old data (which was NOT overwritten because IDB put is atomic)
-  // remains intact.
-  void (async () => {
-    // Step 1: Back up current value to bak1 (shift existing backups)
+
+  // Chain saves sequentially and track the promise for flushing.
+  pendingSavePromise = pendingSavePromise.then(async () => {
+    // Step 1: Back up current value
     const current = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'current')
     if (current) {
       const bak1 = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'bak1')
@@ -179,10 +192,9 @@ export function saveLibrary(state: PersistedLibrary): boolean {
       await idbPut(IDB_LIBRARY_STORE, 'bak1', current)
     }
 
-    // Step 2: Write new data to 'current'
+    // Step 2: Write new data
     const ok = await idbPut(IDB_LIBRARY_STORE, 'current', data)
     if (ok) {
-      // Step 3: Set the localStorage flag so loadLibrary knows data exists
       try {
         localStorage.setItem(LS_FLAG, '1')
       } catch {
@@ -191,8 +203,10 @@ export function saveLibrary(state: PersistedLibrary): boolean {
     } else {
       console.error('[persist] CRITICAL: IDB write failed. Previous data is intact.')
     }
-  })()
-  return true
+    return ok
+  })
+
+  return pendingSavePromise
 }
 
 export function loadLibrary(): PersistedLibrary | null {

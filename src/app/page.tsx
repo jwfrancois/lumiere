@@ -16,7 +16,7 @@ import {
   MusicView,
   PodcastsView,
 } from '@/components/library-views'
-import { useLibrary } from '@/store/library'
+import { useLibrary, flushPersist } from '@/store/library'
 import { useEnrichmentOrchestrator } from '@/hooks/use-enrichment-orchestrator'
 import { useMusicEnrichment } from '@/hooks/use-music-enrichment'
 import { useNeonSync } from '@/hooks/use-neon-sync'
@@ -37,6 +37,26 @@ export default function Home() {
   useMusicEnrichment()
   // Sync library to Neon database (with IndexedDB fallback).
   useNeonSync()
+
+  // CRITICAL: Flush all pending saves when the tab is hidden or closed.
+  // visibilitychange is the reliable path (can await). beforeunload
+  // triggers the save — IDB transactions usually complete during unload.
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'hidden') {
+        await flushPersist()
+      }
+    }
+    const handleBeforeUnload = () => {
+      void flushPersist()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [])
 
   // CRITICAL: Hydrate the persisted library AFTER React has mounted.
   // The store initializes empty (matching SSR) so the first client render
