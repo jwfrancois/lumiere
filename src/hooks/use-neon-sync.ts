@@ -8,7 +8,7 @@ import {
   syncToSupabase,
   loadFromSupabase,
 } from '@/lib/supabase'
-import { flushPersist } from '@/lib/persist'
+import { flushPersist } from '@/store/library'
 
 /**
  * Cloud sync hook — Supabase with IndexedDB fallback.
