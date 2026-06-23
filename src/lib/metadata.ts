@@ -77,7 +77,7 @@ function decodeString(buf: Uint8Array, encoding: number): string {
 }
 
 /** Parse ID3v2 frames from an MP3 file. */
-async function parseID3v2(file: File): Promise<Partial<MediaMetadata>> {
+async function parseID3v2(file: File, skipCoverArt = false): Promise<Partial<MediaMetadata>> {
   const header = new Uint8Array(await file.slice(0, 10).arrayBuffer())
   if (
     header[0] !== 0x49 || // I
@@ -188,7 +188,9 @@ async function parseID3v2(file: File): Promise<Partial<MediaMetadata>> {
         }
         case 'APIC': // Picture
         case 'PIC': {
-          if (!meta.coverUrl) {
+          // Skip cover art extraction during fast scanning — blob URLs
+          // accumulate in memory and cause OOM with many files.
+          if (!skipCoverArt && !meta.coverUrl) {
             const cover = extractPicture(frameData, frameId === 'PIC')
             if (cover) {
               const blob = new Blob([cover.data], { type: cover.mime })
@@ -258,7 +260,7 @@ function extractPicture(
  * Parse MP4 / M4A / MOV boxes. Looks for the `moov` atom and reads
  * `ilst` items (metadata) plus `mvhd` (duration) and `trak` (codec info).
  */
-async function parseMP4(file: File): Promise<Partial<MediaMetadata>> {
+async function parseMP4(file: File, skipCoverArt = false): Promise<Partial<MediaMetadata>> {
   const meta: Partial<MediaMetadata> = { container: 'mp4' }
   const size = file.size
   // We'll iterate top-level atoms. For very large files, we only read
@@ -608,7 +610,7 @@ function parseIlst(buf: Uint8Array, meta: Partial<MediaMetadata>) {
           break
         }
         case 'covr': {
-          if (!meta.coverUrl) {
+          if (!skipCoverArt && !meta.coverUrl) {
             const data = findDataAtom(item, true)
             if (data) {
               const blob = new Blob([data.bytes], { type: data.mime })
@@ -670,7 +672,7 @@ function parseIlstValue(item: Uint8Array): string {
 }
 
 /** Parse Vorbis comments from FLAC files. */
-async function parseFLAC(file: File): Promise<Partial<MediaMetadata>> {
+async function parseFLAC(file: File, skipCoverArt = false): Promise<Partial<MediaMetadata>> {
   const meta: Partial<MediaMetadata> = { container: 'flac' }
   const header = new Uint8Array(await file.slice(0, 4).arrayBuffer())
   if (
@@ -711,8 +713,10 @@ async function parseFLAC(file: File): Promise<Partial<MediaMetadata>> {
       // VORBIS_COMMENT
       parseVorbisComment(blockData, meta)
     } else if (blockType === 6) {
-      // PICTURE
-      parseFlacPicture(blockData, meta)
+      // PICTURE — skip during fast scanning
+      if (!skipCoverArt) {
+        parseFlacPicture(blockData, meta)
+      }
     }
   }
   return meta
@@ -870,6 +874,8 @@ export function probeDuration(file: File): Promise<number | undefined> {
  * @param fast When true (default for scanning), skips probeDuration
  *             which creates media elements and can cause OOM with
  *             many files. Duration is estimated from file size instead.
+ *             Also skips cover art extraction (blob URLs accumulate
+ *             in memory and are never freed during scanning).
  */
 export async function extractMetadata(
   file: File,
@@ -880,7 +886,7 @@ export async function extractMetadata(
 
   try {
     if (name.endsWith('.mp3')) {
-      meta = { ...(await parseID3v2(file)), container: 'mp3' }
+      meta = { ...(await parseID3v2(file, fast)), container: 'mp3' }
     } else if (
       name.endsWith('.m4a') ||
       name.endsWith('.m4b') ||
@@ -889,9 +895,9 @@ export async function extractMetadata(
       name.endsWith('.m4v') ||
       name.endsWith('.mov')
     ) {
-      meta = await parseMP4(file)
+      meta = await parseMP4(file, fast)
     } else if (name.endsWith('.flac')) {
-      meta = await parseFLAC(file)
+      meta = await parseFLAC(file, fast)
     }
   } catch (err) {
     console.warn('metadata parse failed for', file.name, err)

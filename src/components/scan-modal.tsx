@@ -34,8 +34,9 @@ import {
   isFSAccessSupported,
   type ScanProgress,
 } from '@/lib/media-scanner'
-import { extractMetadata } from '@/lib/metadata'
+import { extractMetadata, type MediaMetadata } from '@/lib/metadata'
 import { useLibrary } from '@/store/library'
+import { categorizeFiles } from '@/lib/categorize'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -146,58 +147,71 @@ export function ScanModal({ open, onOpenChange }: ScanModalProps) {
       })
       return
     }
-    setPhase('extracting')
-    setTotalToExtract(files.length)
 
-    // Process files in CHUNKS to avoid memory buildup.
-    // Extract metadata for a chunk, immediately add to store (which
-    // persists to IndexedDB), then clear the chunk's metadata to free
-    // memory before processing the next chunk.
+    // ── PHASE 1: FAST CATALOG ────────────────────────────────────────
+    // Add all files to the store IMMEDIATELY with minimal metadata
+    // (just title from filename). No binary parsing, no cover art
+    // extraction, no duration probing. This is near-instant and uses
+    // almost no memory because we're just storing strings.
     //
-    // CRITICAL: extractMetadata(file, true) uses fast mode which skips
-    // probeDuration() — that function creates <audio>/<video> elements
-    // with object URLs for EVERY file, causing out-of-memory crashes
-    // when scanning hundreds of podcast episodes.
-    const CHUNK_SIZE = 25
-
-    for (let chunkStart = 0; chunkStart < files.length; chunkStart += CHUNK_SIZE) {
-      const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, files.length)
-      const chunk = files.slice(chunkStart, chunkEnd)
-      const chunkMetadata: Record<string, Awaited<ReturnType<typeof extractMetadata>>> = {}
-
-      // Extract metadata for this chunk — ONE FILE AT A TIME
-      for (let i = 0; i < chunk.length; i++) {
-        const f = chunk[i]
-        try {
-          // fast=true skips probeDuration (no media elements created)
-          const md = await extractMetadata(f.file, true)
-          chunkMetadata[f.id] = md
-        } catch (err) {
-          console.warn('Failed to extract metadata for', f.name, err)
-          chunkMetadata[f.id] = { title: f.name.replace(/\.[^.]+$/, '') }
-        }
-        setExtracted(chunkStart + i + 1)
-        // Yield between files for GC
-        await new Promise((r) => setTimeout(r, 0))
-      }
-
-      // Add this chunk to the store immediately (persists to IndexedDB)
-      // Only pass folderName/fsaHandle on the FIRST chunk
-      const isFirstChunk = chunkStart === 0
-      addFiles(
-        chunk,
-        chunkMetadata,
-        isFirstChunk ? folderName : undefined,
-        folderId,
-        isFirstChunk ? fsaHandle : null,
-      )
-
-      // Clear chunk data to free memory before next chunk
-      chunk.length = 0
-      for (const key of Object.keys(chunkMetadata)) {
-        delete chunkMetadata[key]
+    // The categorizer groups files into movies/TV/albums/podcasts
+    // based on filename patterns alone — no metadata needed.
+    setPhase('scanning')
+    const minimalMetadata: Record<string, { title: string }> = {}
+    for (const f of files) {
+      minimalMetadata[f.id] = {
+        title: f.name.replace(/\.[^.]+$/, '').replace(/[._]/g, ' ').trim(),
       }
     }
+
+    // Add all files at once — single categorization pass, single persist
+    addFiles(files, minimalMetadata, folderName, folderId, fsaHandle)
+
+    // ── PHASE 2: BACKGROUND METADATA EXTRACTION ──────────────────────
+    // Extract real metadata one file at a time. Re-categorize every
+    // 10 files (not every file) to reduce CPU/memory pressure.
+    setPhase('extracting')
+    setTotalToExtract(files.length)
+    let pendingMetaUpdates: Record<string, MediaMetadata> = {}
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]
+      try {
+        const md = await extractMetadata(f.file, true)
+        pendingMetaUpdates[f.id] = md
+      } catch (err) {
+        console.warn('Metadata extraction failed for', f.name, err)
+      }
+      setExtracted(i + 1)
+
+      // Batch re-categorize every 10 files (or on the last file)
+      if ((i + 1) % 10 === 0 || i === files.length - 1) {
+        const currentState = useLibrary.getState()
+        const updatedMeta = { ...currentState.rawMetadata, ...pendingMetaUpdates }
+        useLibrary.setState({ rawMetadata: updatedMeta })
+        // Re-categorize
+        const input = currentState.scannedFiles.map((sf) => ({
+          file: sf,
+          metadata: updatedMeta[sf.id] || ({} as MediaMetadata),
+        }))
+        const result = categorizeFiles(input)
+        useLibrary.setState({
+          movies: result.movies,
+          collections: result.collections,
+          tvShows: result.tvShows,
+          albums: result.albums,
+          podcasts: result.podcasts,
+          stats: result.stats,
+        })
+        pendingMetaUpdates = {} // clear batch
+      }
+
+      // Yield to event loop for GC + UI paint
+      await new Promise((r) => setTimeout(r, 0))
+    }
+
+    // Final persist
+    useLibrary.getState().persist()
     setScanning(false)
     setPhase('done')
     toast.success(
