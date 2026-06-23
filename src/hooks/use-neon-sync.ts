@@ -2,30 +2,52 @@
 
 import { useEffect, useRef, useCallback } from 'react'
 import { useLibrary } from '@/store/library'
+import {
+  isSupabaseEnabled,
+  getOrCreateUser,
+  syncToSupabase,
+  loadFromSupabase,
+} from '@/lib/supabase'
+import { flushPersist } from '@/lib/persist'
 
 /**
- * Neon database sync hook.
+ * Cloud sync hook — Supabase with IndexedDB fallback.
  *
- * Periodically syncs the in-memory library state to the Neon PostgreSQL
- * database via /api/library/sync. Also loads from Neon on first mount
- * if no local data exists.
- *
- * Auth: Uses a device key stored in localStorage. On first visit, a new
- * device key is generated and a User row is created in Neon.
- *
- * Fallback: If Neon is unreachable (e.g. offline or no DATABASE_URL),
- * silently falls back to IndexedDB persistence (the existing system).
+ * 1. On mount: authenticate device, load from Supabase if no local data
+ * 2. On changes: debounced sync to Supabase + IndexedDB
+ * 3. On unload: flush all pending saves
  */
 
 const DEVICE_KEY_STORAGE = 'lumiere:device-key'
 const USER_ID_STORAGE = 'lumiere:user-id'
-const SYNC_INTERVAL = 30000 // 30 seconds
-const SYNC_DEBOUNCE = 3000 // 3 seconds after last change
+const SYNC_DEBOUNCE = 5000
 
 export function useNeonSync() {
   const userIdRef = useRef<string | null>(null)
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isSyncingRef = useRef(false)
+  const lastSyncHashRef = useRef('')
+
+  // ── Beforeunload: flush pending saves ────────────────────────────────
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const state = useLibrary.getState()
+      if (state.scannedFiles.length > 0) {
+        void flushPersist()
+      }
+    }
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'hidden') {
+        await flushPersist()
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
 
   // Get or create device key
   const getDeviceKey = useCallback((): string => {
@@ -38,45 +60,45 @@ export function useNeonSync() {
     return key
   }, [])
 
-  // Authenticate with the server
+  // Authenticate with Supabase
   const authenticate = useCallback(async (): Promise<string | null> => {
     if (typeof window === 'undefined') return null
-    // Check for cached user ID
     const cached = localStorage.getItem(USER_ID_STORAGE)
     if (cached) {
       userIdRef.current = cached
       return cached
     }
+    if (!isSupabaseEnabled) return null
 
     try {
       const deviceKey = getDeviceKey()
-      const res = await fetch('/api/auth/device', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceKey }),
-      })
-      if (!res.ok) return null
-      const data = await res.json()
-      localStorage.setItem(USER_ID_STORAGE, data.userId)
-      userIdRef.current = data.userId
-      return data.userId
+      const userId = await getOrCreateUser(deviceKey)
+      if (userId) {
+        localStorage.setItem(USER_ID_STORAGE, userId)
+        userIdRef.current = userId
+      }
+      return userId
     } catch {
-      // Server unreachable — fall back to IndexedDB
       return null
     }
   }, [getDeviceKey])
 
-  // Sync library to Neon
-  const syncToNeon = useCallback(async () => {
+  // Sync to Supabase
+  const syncToCloud = useCallback(async () => {
     if (isSyncingRef.current) return
     const userId = userIdRef.current
-    if (!userId) return
+    if (!userId || !isSupabaseEnabled) return
 
     isSyncingRef.current = true
     try {
       const state = useLibrary.getState()
-      const body = {
-        userId,
+      if (state.scannedFiles.length === 0) return
+
+      const hash = `${state.scannedFiles.length}:${Object.keys(state.enrichment).length}:${state.collections.length}`
+      if (hash === lastSyncHashRef.current) return
+      lastSyncHashRef.current = hash
+
+      await syncToSupabase(userId, {
         folders: state.scannedFolders.map((f) => ({
           id: f.id,
           name: f.name,
@@ -106,35 +128,33 @@ export function useNeonSync() {
           coverUrl: c.coverUrl,
           year: c.year,
         })),
-      }
-
-      await fetch('/api/library/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
       })
     } catch (err) {
-      console.warn('[neon] Sync failed (will retry):', err)
+      console.warn('[sync] Cloud sync failed:', err)
     } finally {
       isSyncingRef.current = false
     }
   }, [])
 
-  // Load from Neon
-  const loadFromNeon = useCallback(async (userId: string): Promise<boolean> => {
+  // Load from Supabase
+  const loadFromCloud = useCallback(async (userId: string): Promise<boolean> => {
+    if (!isSupabaseEnabled) return false
     try {
-      const res = await fetch(`/api/library/load?userId=${userId}`)
-      if (!res.ok) return false
-      const data = await res.json()
-      if (!data.folders || data.folders.length === 0) return false
+      const data = await loadFromSupabase(userId)
+      if (!data || !data.folders || data.folders.length === 0) return false
 
-      // Import the persist helpers to apply the loaded data
+      // Only apply if store is still empty
+      if (useLibrary.getState().scannedFiles.length > 0) {
+        console.log('[sync] Local data exists — skipping cloud load')
+        return true
+      }
+
       const { manifestToUnavailableFiles } = await import('@/lib/persist')
       const { categorizeFiles } = await import('@/lib/categorize')
 
-      const files = manifestToUnavailableFiles(data.files)
+      const files = manifestToUnavailableFiles(data.files as Array<{ id: string; name: string; path: string; kind: 'video' | 'audio'; size: number; folderId?: string }>)
       const rawMetadata = data.rawMetadata || {}
-      const folders = (data.folders || []).map((f: { id: string; name: string; fileCount: number; scannedAt: number; hasFsaHandle: boolean }) => ({
+      const folders = (data.folders || []).map((f) => ({
         ...f,
         connected: false,
       }))
@@ -150,7 +170,6 @@ export function useNeonSync() {
         rawMetadata,
         scannedFolders: folders,
         enrichment: data.enrichment || {},
-        collections: data.collections || [],
         currentView: 'home',
         movies: result.movies,
         collections: result.collections,
@@ -159,54 +178,47 @@ export function useNeonSync() {
         podcasts: result.podcasts,
         stats: result.stats,
       })
-
+      console.log('[sync] Library loaded from Supabase')
       return true
     } catch (err) {
-      console.warn('[neon] Load failed:', err)
+      console.warn('[sync] Cloud load failed:', err)
       return false
     }
   }, [])
 
-  // Initialize: authenticate, then try loading from Neon
+  // Initialize: authenticate, then try loading from cloud
   useEffect(() => {
     void (async () => {
       const userId = await authenticate()
-      if (!userId) return // Server unreachable — fall back to IndexedDB
+      if (!userId) return
 
-      // If local store is empty, try loading from Neon
-      const hasLocalData = useLibrary.getState().scannedFiles.length > 0
-      if (!hasLocalData) {
-        console.log('[neon] No local data — loading from Neon...')
-        const loaded = await loadFromNeon(userId)
-        if (loaded) {
-          console.log('[neon] Library loaded from Neon')
-        }
+      // Wait for IndexedDB hydration to complete first
+      await new Promise((r) => setTimeout(r, 2000))
+
+      if (useLibrary.getState().scannedFiles.length === 0) {
+        console.log('[sync] No local data — loading from Supabase...')
+        await loadFromCloud(userId)
       }
     })()
-  }, [authenticate, loadFromNeon])
+  }, [authenticate, loadFromCloud])
 
-  // Debounced sync — whenever the library changes, schedule a sync
-  const scheduleSync = useCallback(() => {
-    if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
-    syncTimerRef.current = setTimeout(() => {
-      void syncToNeon()
+  // Poll for changes and sync (every 5 seconds)
+  useEffect(() => {
+    const checkInterval = setInterval(() => {
+      const state = useLibrary.getState()
+      if (state.scannedFiles.length === 0) return
+      const hash = `${state.scannedFiles.length}:${Object.keys(state.enrichment).length}:${state.collections.length}`
+      if (hash !== lastSyncHashRef.current) {
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
+        syncTimerRef.current = setTimeout(() => void syncToCloud(), SYNC_DEBOUNCE)
+      }
     }, SYNC_DEBOUNCE)
-  }, [syncToNeon])
+    return () => clearInterval(checkInterval)
+  }, [syncToCloud])
 
-  // Subscribe to store changes
+  // Periodic sync (every 30s) as safety net
   useEffect(() => {
-    const unsub = useLibrary.subscribe(
-      (state) => state.scannedFiles.length + state.enrichment.size,
-      () => scheduleSync(),
-    )
-    return unsub
-  }, [scheduleSync])
-
-  // Periodic sync (every 30s)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      void syncToNeon()
-    }, SYNC_INTERVAL)
+    const interval = setInterval(() => void syncToCloud(), 30000)
     return () => clearInterval(interval)
-  }, [syncToNeon])
+  }, [syncToCloud])
 }

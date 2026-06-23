@@ -200,6 +200,7 @@ export function saveLibrary(state: PersistedLibrary): Promise<boolean> {
       } catch {
         /* flag is best-effort */
       }
+      console.log('[persist] Saved to IDB:', data.fileManifest?.length, 'files,', data.scannedFolders?.length, 'folders')
     } else {
       console.error('[persist] CRITICAL: IDB write failed. Previous data is intact.')
     }
@@ -262,16 +263,19 @@ export function loadLibrary(): PersistedLibrary | null {
  * Tries: current → bak1 → bak2 → bak3 → legacy localStorage → null
  */
 export async function loadLibraryAsync(): Promise<PersistedLibrary | null> {
+  console.log('[persist] loadLibraryAsync: checking IDB...')
   // Try primary key
   let data = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, 'current')
-  if (data && data.version === 2) return data
+  if (data && data.version === 2) {
+    console.log('[persist] Found primary data:', data.fileManifest?.length, 'files')
+    return data
+  }
 
   // Try rotating backups
   for (const bakKey of ['bak1', 'bak2', 'bak3']) {
     data = await idbGet<PersistedLibrary>(IDB_LIBRARY_STORE, bakKey)
     if (data && data.version === 2) {
       console.log(`[persist] Recovered library from IDB backup: ${bakKey}`)
-      // Re-save to primary
       await idbPut(IDB_LIBRARY_STORE, 'current', data)
       return data
     }

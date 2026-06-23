@@ -501,12 +501,18 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
     // If no data was loaded synchronously, try async IndexedDB load
     if (get().scannedFiles.length === 0) {
+      console.log('[store] No sync data — loading from IndexedDB...')
       void loadLibraryAsync().then((persisted) => {
-        if (!persisted) return
+        if (!persisted) {
+          console.log('[store] No IDB data found — fresh start')
+          return
+        }
+        console.log('[store] Loaded from IDB:', persisted.fileManifest?.length, 'files,', persisted.scannedFolders?.length, 'folders')
         applyPersistedDataFromObj(persisted)
         // Load enrichment from IndexedDB
         void loadEnrichment().then((enrich) => {
           if (enrich && Object.keys(enrich).length > 0) {
+            console.log('[store] Loaded enrichment:', Object.keys(enrich).length, 'entries')
             set({ enrichment: enrich })
           }
         })

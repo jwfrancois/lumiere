@@ -57,4 +57,4 @@ server.log
 /scripts/  # Test injection scripts (dev only)
 /upload/   # Uploaded reference images
 /worklog.md
-/.zscripts/
+/.zscripts/.env
