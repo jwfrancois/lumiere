@@ -1,35 +1,46 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 /**
  * Supabase client for Lumière cloud sync.
  *
- * Stores library metadata (folders, files, enrichment, collections,
- * listening history, tags) in Supabase PostgreSQL. Actual media files
- * stay in the browser via File System Access API.
- *
- * Falls back to IndexedDB when Supabase is unreachable.
+ * IMPORTANT: The client is created LAZILY (on first access) to avoid
+ * SSR crashes. @supabase/supabase-js references browser APIs that
+ * don't exist during server-side rendering.
  */
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+let _supabase: SupabaseClient | null = null
+let _initialized = false
 
-export const supabase = SUPABASE_URL && SUPABASE_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_KEY, {
+function getSupabase(): SupabaseClient | null {
+  if (_initialized) return _supabase
+  _initialized = true
+
+  if (typeof window === 'undefined') return null // SSR safety
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+
+  if (url && key) {
+    _supabase = createClient(url, key, {
       auth: { persistSession: false },
     })
-  : null
+  }
+  return _supabase
+}
 
-export const isSupabaseEnabled = !!supabase
+export const isSupabaseEnabled = typeof window !== 'undefined' &&
+  !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
 
 /**
  * Device-based auth: get or create a user row for this browser.
  * Returns the user ID for use in all subsequent queries.
  */
 export async function getOrCreateUser(deviceKey: string): Promise<string | null> {
-  if (!supabase) return null
+  const sb = getSupabase()
+  if (!sb) return null
 
   // Try to find existing user
-  const { data: existing } = await supabase
+  const { data: existing } = await sb
     .from('lumiere_users')
     .select('id')
     .eq('device_key', deviceKey)
@@ -38,7 +49,7 @@ export async function getOrCreateUser(deviceKey: string): Promise<string | null>
   if (existing) return existing.id
 
   // Create new user
-  const { data: newUser, error } = await supabase
+  const { data: newUser, error } = await sb
     .from('lumiere_users')
     .insert({ device_key: deviceKey })
     .select('id')
@@ -66,14 +77,15 @@ export async function syncToSupabase(
     collections: Array<Record<string, unknown>>
   },
 ): Promise<boolean> {
-  if (!supabase) return false
+  const sb = getSupabase()
+  if (!sb) return false
 
   try {
-    // Delete old data (cascade will handle related tables)
-    await supabase.from('lumiere_enrichment').delete().eq('user_id', userId)
-    await supabase.from('lumiere_collections').delete().eq('user_id', userId)
-    await supabase.from('lumiere_files').delete().eq('user_id', userId)
-    await supabase.from('lumiere_folders').delete().eq('user_id', userId)
+    // Delete old data
+    await sb.from('lumiere_enrichment').delete().eq('user_id', userId)
+    await sb.from('lumiere_collections').delete().eq('user_id', userId)
+    await sb.from('lumiere_files').delete().eq('user_id', userId)
+    await sb.from('lumiere_folders').delete().eq('user_id', userId)
 
     // Insert folders
     if (data.folders.length > 0) {
@@ -84,10 +96,10 @@ export async function syncToSupabase(
         file_count: f.fileCount,
         has_fsa_handle: f.hasFsaHandle || false,
       }))
-      await supabase.from('lumiere_folders').upsert(folders)
+      await sb.from('lumiere_folders').upsert(folders)
     }
 
-    // Insert files (batch of 500 to avoid payload limits)
+    // Insert files (batch of 500)
     if (data.files.length > 0) {
       const files = data.files.map((f) => ({
         id: f.id,
@@ -100,7 +112,7 @@ export async function syncToSupabase(
         metadata: data.rawMetadata[f.id] || null,
       }))
       for (let i = 0; i < files.length; i += 500) {
-        await supabase.from('lumiere_files').upsert(files.slice(i, i + 500))
+        await sb.from('lumiere_files').upsert(files.slice(i, i + 500))
       }
     }
 
@@ -111,7 +123,7 @@ export async function syncToSupabase(
       data: val,
     }))
     for (let i = 0; i < enrichEntries.length; i += 500) {
-      await supabase.from('lumiere_enrichment').upsert(enrichEntries.slice(i, i + 500))
+      await sb.from('lumiere_enrichment').upsert(enrichEntries.slice(i, i + 500))
     }
 
     // Insert collections
@@ -124,7 +136,7 @@ export async function syncToSupabase(
         cover_url: c.coverUrl,
         year: c.year,
       }))
-      await supabase.from('lumiere_collections').upsert(collections)
+      await sb.from('lumiere_collections').upsert(collections)
     }
 
     return true
@@ -146,14 +158,15 @@ export async function loadFromSupabase(
   enrichment: Record<string, unknown>
   collections: Array<Record<string, unknown>>
 } | null> {
-  if (!supabase) return null
+  const sb = getSupabase()
+  if (!sb) return null
 
   try {
     const [foldersRes, filesRes, enrichRes, collectionsRes] = await Promise.all([
-      supabase.from('lumiere_folders').select('*').eq('user_id', userId),
-      supabase.from('lumiere_files').select('*').eq('user_id', userId),
-      supabase.from('lumiere_enrichment').select('*').eq('user_id', userId),
-      supabase.from('lumiere_collections').select('*').eq('user_id', userId),
+      sb.from('lumiere_folders').select('*').eq('user_id', userId),
+      sb.from('lumiere_files').select('*').eq('user_id', userId),
+      sb.from('lumiere_enrichment').select('*').eq('user_id', userId),
+      sb.from('lumiere_collections').select('*').eq('user_id', userId),
     ])
 
     if (!foldersRes.data || foldersRes.data.length === 0) return null
