@@ -1515,7 +1515,7 @@ export function PodcastsView() {
   const currentIndex = useLibrary((s) => s.currentIndex)
   const listeningHistory = useLibrary((s) => s.listeningHistory)
   const [query, setQuery] = useState('')
-  const [browseMode, setBrowseMode] = useState<'shows' | 'episodes' | 'history'>('shows')
+  const [browseMode, setBrowseMode] = useState<'shows' | 'episodes' | 'history' | 'by-host'>('shows')
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
@@ -1611,6 +1611,7 @@ export function PodcastsView() {
   const browseModes = [
     { id: 'shows' as const, label: 'Shows' },
     { id: 'episodes' as const, label: 'Episodes' },
+    { id: 'by-host' as const, label: 'By Podcaster' },
     { id: 'history' as const, label: 'Recently Played' },
   ]
 
@@ -1938,11 +1939,207 @@ export function PodcastsView() {
           )}
         </div>
       )}
+
+      {/* ── By Podcaster browse mode ──────────────────────────────────── */}
+      {/* Groups podcasts by host, showing each podcaster's shows and all
+          their episodes — just like music albums grouped by artist with
+          tracks listed underneath. */}
+      {browseMode === 'by-host' && (
+        <BrowsePodcastsByHost
+          podcasts={query ? filtered : podcasts}
+          enrichment={enrichment}
+          onPodcastClick={(id) => openDetail({ kind: 'podcast', id })}
+          onEpisodePlay={(podcastId, episodeId) => {
+            const pod = podcasts.find((p) => p.id === podcastId)
+            if (pod) {
+              const q = buildPodcastQueue(pod, episodeId)
+              playQueue(q, 0)
+            }
+          }}
+          currentEpisodeId={queue[currentIndex]?.id}
+        />
+      )}
     </div>
   )
 }
 
-/* ---------------- Shared empty state ---------------- */
+/* ── Browse Podcasts By Podcaster ─────────────────────────────────────── */
+/* Groups podcasts by their host (podcaster), then lists each show's
+   episodes underneath — like Spotify's "Artists" browse mode but for
+   podcasts. Each podcaster section shows their shows as cards, with
+   all episodes listed like album tracks. */
+
+function BrowsePodcastsByHost({
+  podcasts,
+  enrichment,
+  onPodcastClick,
+  onEpisodePlay,
+  currentEpisodeId,
+}: {
+  podcasts: Array<{
+    id: string
+    title: string
+    host?: string
+    coverUrl?: string
+    episodes: Array<{
+      id: string
+      episodeNumber: number
+      metadata: { title?: string; durationSec?: number; description?: string }
+    }>
+  }>
+  enrichment: Record<string, { artworkUrl?: string; artworkUrlHiRes?: string; genre?: string; bio?: string }>
+  onPodcastClick: (id: string) => void
+  onEpisodePlay: (podcastId: string, episodeId: string) => void
+  currentEpisodeId?: string
+}) {
+  // Group podcasts by host
+  const byHost = useMemo(() => {
+    const map = new Map<string, typeof podcasts>()
+    for (const p of podcasts) {
+      const host = (p.host || 'Unknown Host').trim()
+      const list = map.get(host) || []
+      list.push(p)
+      map.set(host, list)
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [podcasts])
+
+  if (byHost.length === 0) {
+    return (
+      <div className="px-6 md:px-8 text-center py-12 text-sm text-muted-foreground">
+        No podcasts found.
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-6 md:px-8 space-y-8">
+      {byHost.map(([host, shows]) => {
+        // Total episodes across all shows by this host
+        const totalEpisodes = shows.reduce((sum, s) => sum + s.episodes.length, 0)
+        // Get cover from first show
+        const firstShow = shows[0]
+        const firstEnrich = enrichment[`podcast:${firstShow.id}`]
+        const hostCover = firstShow.coverUrl || firstEnrich?.artworkUrlHiRes || firstEnrich?.artworkUrl
+
+        return (
+          <div key={host}>
+            {/* Podcaster header — like an artist header */}
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-16 h-16 md:w-20 md:h-20 rounded-full overflow-hidden bg-muted shrink-0 border-2 border-[var(--accent)]/30">
+                {hostCover ? (
+                  <img src={hostCover} alt={host} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/30 to-emerald-700/30">
+                    <Mic className="w-8 h-8 text-[var(--accent)]" />
+                  </div>
+                )}
+              </div>
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold">{host}</h2>
+                <p className="text-xs text-muted-foreground">
+                  {shows.length} show{shows.length === 1 ? '' : 's'} · {totalEpisodes} episode{totalEpisodes === 1 ? '' : 's'}
+                </p>
+              </div>
+            </div>
+
+            {/* Shows by this host — each show is like an album with tracks */}
+            {shows.map((show) => {
+              const showEnrich = enrichment[`podcast:${show.id}`]
+              const showCover = show.coverUrl || showEnrich?.artworkUrlHiRes || showEnrich?.artworkUrl
+              return (
+                <div key={show.id} className="mb-6 ml-4 md:ml-8">
+                  {/* Show header — like an album header */}
+                  <button
+                    onClick={() => onPodcastClick(show.id)}
+                    className="flex items-center gap-3 mb-2 group text-left w-full"
+                  >
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-muted shrink-0">
+                      {showCover ? (
+                        <img src={showCover} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/20 to-emerald-700/20">
+                          <Mic className="w-4 h-4 text-[var(--accent)]" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold truncate group-hover:text-[var(--accent)] transition-colors">
+                        {show.title}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {show.episodes.length} episode{show.episodes.length === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Episode list — like a track listing */}
+                  <div className="ml-4 md:ml-8 space-y-0.5">
+                    {show.episodes.map((ep) => {
+                      const isCurrent = currentEpisodeId === ep.id
+                      return (
+                        <button
+                          key={ep.id}
+                          onClick={() => onEpisodePlay(show.id, ep.id)}
+                          className={cn(
+                            'w-full grid grid-cols-[2rem_1fr_auto] items-center gap-3 p-2 rounded-lg transition text-left group',
+                            isCurrent
+                              ? 'bg-[var(--accent)]/15'
+                              : 'hover:bg-white/[0.06]',
+                          )}
+                        >
+                          <div className={cn(
+                            'text-xs font-bold tabular-nums text-center',
+                            isCurrent ? 'text-[var(--accent)]' : 'text-muted-foreground',
+                          )}>
+                            {isCurrent ? (
+                              <div className="flex items-end gap-[2px] h-4 justify-center">
+                                {[0, 1, 2].map((j) => (
+                                  <span
+                                    key={j}
+                                    className="w-[2px] bg-[var(--accent)] rounded-full eq-bar"
+                                    style={{ animationDelay: `${j * 0.15}s` }}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              ep.episodeNumber
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className={cn(
+                              'text-sm font-medium truncate',
+                              isCurrent && 'text-[var(--accent)]',
+                            )}>
+                              {ep.metadata.title || `Episode ${ep.episodeNumber}`}
+                            </div>
+                            {ep.metadata.description && (
+                              <div className="text-xs text-muted-foreground line-clamp-1">
+                                {ep.metadata.description}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {ep.metadata.durationSec && (
+                              <span className="text-[11px] text-muted-foreground tabular-nums">
+                                {Math.round(ep.metadata.durationSec / 60)} min
+                              </span>
+                            )}
+                            <Play className="w-3.5 h-3.5 text-muted-foreground group-hover:text-[var(--accent)] opacity-0 group-hover:opacity-100 transition shrink-0" />
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 function EmptyView({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="pb-12">
