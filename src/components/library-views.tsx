@@ -24,6 +24,7 @@ import {
   Clock,
   Trophy,
   PlayCircle,
+  Play,
   Plus,
   RefreshCw,
 } from 'lucide-react'
@@ -1507,11 +1508,14 @@ function BrowseByTags({
 /** Spotify-style Podcasts view */
 export function PodcastsView() {
   const podcasts = useLibrary((s) => s.podcasts)
+  const enrichment = useLibrary((s) => s.enrichment)
   const openDetail = useLibrary((s) => s.openDetail)
   const playQueue = useLibrary((s) => s.playQueue)
   const queue = useLibrary((s) => s.queue)
   const currentIndex = useLibrary((s) => s.currentIndex)
+  const listeningHistory = useLibrary((s) => s.listeningHistory)
   const [query, setQuery] = useState('')
+  const [browseMode, setBrowseMode] = useState<'shows' | 'episodes' | 'history'>('shows')
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
@@ -1527,15 +1531,29 @@ export function PodcastsView() {
     ? podcasts.find((p) => p.title === queue[currentIndex]?.metadata.showName)?.id
     : undefined
 
-  // Latest episodes across all podcasts (Spotify "Latest Episodes")
-  // Computed before the early return so Hooks order is stable.
+  // Latest episodes across all podcasts
   const latestEpisodes = useMemo(() => {
-    const eps: Array<{ podcastTitle: string; episodeTitle: string; durationSec?: number; onPlay: () => void }> = []
+    type Ep = {
+      podcastId: string
+      podcastTitle: string
+      podcastCover?: string
+      episodeId: string
+      episodeTitle: string
+      episodeNumber: number
+      durationSec?: number
+      onPlay: () => void
+    }
+    const eps: Ep[] = []
     for (const p of podcasts) {
       for (const ep of p.episodes.slice(-3).reverse()) {
+        const pEnrich = enrichment[`podcast:${p.id}`]
         eps.push({
+          podcastId: p.id,
           podcastTitle: p.title,
+          podcastCover: p.coverUrl || pEnrich?.artworkUrlHiRes || pEnrich?.artworkUrl,
+          episodeId: ep.id,
           episodeTitle: ep.metadata.title || `Episode ${ep.episodeNumber}`,
+          episodeNumber: ep.episodeNumber,
           durationSec: ep.metadata.durationSec,
           onPlay: () => {
             const q = buildPodcastQueue(p, ep.id)
@@ -1544,8 +1562,39 @@ export function PodcastsView() {
         })
       }
     }
-    return eps.slice(0, 12)
-  }, [podcasts, playQueue])
+    return eps.slice(0, 20)
+  }, [podcasts, playQueue, enrichment])
+
+  // Continue listening — from listening history
+  const continueListening = useMemo(() => {
+    const played = new Map<string, { podcastId: string; episodeId: string; title: string; subtitle: string; cover?: string; lastPlayed: number; playCount: number }>()
+    for (const p of podcasts) {
+      for (const ep of p.episodes) {
+        const stats = listeningHistory.tracks[ep.id]
+        if (stats && stats.playCount > 0) {
+          const pEnrich = enrichment[`podcast:${p.id}`]
+          played.set(ep.id, {
+            podcastId: p.id,
+            episodeId: ep.id,
+            title: ep.metadata.title || `Episode ${ep.episodeNumber}`,
+            subtitle: p.title,
+            cover: p.coverUrl || pEnrich?.artworkUrlHiRes || pEnrich?.artworkUrl,
+            lastPlayed: stats.lastPlayed,
+            playCount: stats.playCount,
+          })
+        }
+      }
+    }
+    return Array.from(played.values())
+      .sort((a, b) => b.lastPlayed - a.lastPlayed)
+      .slice(0, 6)
+  }, [podcasts, listeningHistory, enrichment])
+
+  // Featured podcast for hero (most episodes)
+  const featured = useMemo(() => {
+    if (podcasts.length === 0) return null
+    return [...podcasts].sort((a, b) => b.episodes.length - a.episodes.length)[0]
+  }, [podcasts])
 
   if (podcasts.length === 0) {
     return (
@@ -1556,16 +1605,80 @@ export function PodcastsView() {
     )
   }
 
+  const featuredEnrich = featured ? enrichment[`podcast:${featured.id}`] : undefined
+  const featuredCover = featured?.coverUrl || featuredEnrich?.artworkUrlHiRes || featuredEnrich?.artworkUrl
+
+  const browseModes = [
+    { id: 'shows' as const, label: 'Shows' },
+    { id: 'episodes' as const, label: 'Episodes' },
+    { id: 'history' as const, label: 'Recently Played' },
+  ]
+
   return (
     <div className="pb-32">
-      {/* Header */}
-      <div className="mb-6 px-6 md:px-8">
+      {/* ── Spotify-style hero banner ─────────────────────────────────── */}
+      {!query && featured && (
+        <section className="relative h-[280px] md:h-[340px] -mx-6 md:-mx-8 mb-6 overflow-hidden">
+          {featuredCover ? (
+            <>
+              <img
+                src={featuredCover}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[var(--background)] via-[var(--background)]/60 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-r from-[var(--background)]/80 via-transparent to-transparent" />
+            </>
+          ) : (
+            <div className="absolute inset-0 bg-gradient-to-br from-[var(--accent)]/30 via-purple-900/20 to-emerald-900/30" />
+          )}
+          <div className="relative h-full flex items-end px-6 md:px-8 pb-6 gap-5">
+            {featuredCover && (
+              <div className="w-32 h-32 md:w-40 md:h-40 rounded-xl overflow-hidden shadow-2xl shrink-0 border border-white/10">
+                <img src={featuredCover} alt={featured.title} className="w-full h-full object-cover" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <Mic className="w-4 h-4 text-[var(--accent)]" />
+                <span className="text-xs uppercase tracking-widest text-[var(--accent)] font-bold">Featured Podcast</span>
+              </div>
+              <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-2 text-white drop-shadow-lg">
+                {featured.title}
+              </h1>
+              <p className="text-sm text-white/70 mb-3">
+                {featured.host && `Hosted by ${featured.host} · `}
+                {featured.episodes.length} episodes
+                {featuredEnrich?.genre && ` · ${featuredEnrich.genre}`}
+              </p>
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={() => playQueue(buildPodcastQueue(featured))}
+                  className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-[var(--accent-foreground)] font-bold"
+                >
+                  <Play className="w-4 h-4 fill-current" /> Play
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => openDetail({ kind: 'podcast', id: featured.id })}
+                  className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+                >
+                  See Details
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Header + browse modes */}
+      <div className="mb-4 px-6 md:px-8">
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[var(--accent)] to-emerald-700 flex items-center justify-center spotify-glow">
             <Mic className="w-5 h-5 text-[var(--accent-foreground)]" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Podcasts</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Podcasts</h1>
             <p className="text-xs text-muted-foreground">
               {podcasts.length} shows · {podcasts.reduce((s, p) => s + p.episodes.length, 0)} episodes
             </p>
@@ -1573,12 +1686,30 @@ export function PodcastsView() {
         </div>
       </div>
 
+      {/* Browse mode tabs */}
+      <div className="px-6 md:px-8 mb-4 flex items-center gap-2 overflow-x-auto rail-scroll">
+        {browseModes.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setBrowseMode(m.id)}
+            className={cn(
+              'genre-chip px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap',
+              browseMode === m.id
+                ? 'genre-chip-active'
+                : 'bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10',
+            )}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {/* Search */}
       <div className="px-6 md:px-8 mb-6">
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Search podcasts…"
+            placeholder="Search podcasts and episodes…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9 bg-white/5 border-white/10"
@@ -1586,86 +1717,225 @@ export function PodcastsView() {
         </div>
       </div>
 
-      {!query && (
+      {/* ── Shows browse mode ─────────────────────────────────────────── */}
+      {browseMode === 'shows' && (
         <>
-          {/* Latest Episodes list (Spotify-style) */}
-          {latestEpisodes.length > 0 && (
-            <section className="mb-8 px-6 md:px-8">
-              <div className="flex items-end justify-between mb-3">
-                <h2 className="text-xl md:text-2xl font-bold">Latest Episodes</h2>
-                <button className="text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground hover:underline">
-                  Show all
-                </button>
-              </div>
-              <div className="space-y-1">
-                {latestEpisodes.map((ep, i) => (
-                  <button
-                    key={i}
-                    onClick={ep.onPlay}
-                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/[0.06] transition group text-left"
-                  >
-                    <div className="w-12 h-12 rounded bg-[var(--accent)]/20 flex items-center justify-center shrink-0">
-                      <PlayCircle className="w-6 h-6 text-[var(--accent)] group-hover:scale-110 transition" />
+          {!query && (
+            <>
+              {/* Continue Listening */}
+              {continueListening.length > 0 && (
+                <SpotifyRail title="Continue Listening" subtitle="Pick up where you left off">
+                  {continueListening.map((item) => (
+                    <div key={item.episodeId} className="w-44 md:w-52 shrink-0">
+                      <SpotifyCard
+                        title={item.title}
+                        subtitle={item.subtitle}
+                        coverUrl={item.cover}
+                        kind="podcast"
+                        badge={`${item.playCount}× played`}
+                        onClick={() => {
+                          const pod = podcasts.find((p) => p.id === item.podcastId)
+                          if (pod) {
+                            const q = buildPodcastQueue(pod, item.episodeId)
+                            playQueue(q, 0)
+                          }
+                        }}
+                        onPlay={() => {
+                          const pod = podcasts.find((p) => p.id === item.podcastId)
+                          if (pod) {
+                            const q = buildPodcastQueue(pod, item.episodeId)
+                            playQueue(q, 0)
+                          }
+                        }}
+                      />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate">{ep.episodeTitle}</div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {ep.podcastTitle}
-                      </div>
-                    </div>
-                    {ep.durationSec && (
-                      <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                        {Math.round(ep.durationSec / 60)} min
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </section>
+                  ))}
+                </SpotifyRail>
+              )}
+
+              {/* Quick-pick tiles for shows */}
+              {podcasts.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 px-6 md:px-8 mb-8">
+                  {podcasts.slice(0, 8).map((p) => {
+                    const pEnrich = enrichment[`podcast:${p.id}`]
+                    const cover = p.coverUrl || pEnrich?.artworkUrlHiRes || pEnrich?.artworkUrl
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                        className="flex items-center gap-3 rounded-md overflow-hidden bg-white/[0.04] hover:bg-white/[0.1] transition group"
+                      >
+                        <div className="w-14 h-14 shrink-0 overflow-hidden">
+                          {cover ? (
+                            <img src={cover} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/30 to-emerald-700/30">
+                              <Mic className="w-5 h-5 text-[var(--accent)]" />
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-sm font-semibold truncate pr-3">{p.title}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Your Podcasts rail */}
-          <SpotifyRail title="Your Podcasts">
-            {filtered.map((p) => (
-              <div key={p.id} className="w-44 md:w-52 shrink-0">
+          {/* All shows grid */}
+          <div className="px-6 md:px-8">
+            <h2 className="text-lg font-bold mb-4">
+              {query ? `${filtered.length} result${filtered.length === 1 ? '' : 's'}` : `All Shows (${filtered.length})`}
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
+              {filtered.map((p) => (
                 <SpotifyCard
+                  key={p.id}
                   title={p.title}
                   subtitle={p.host}
                   coverUrl={p.coverUrl}
                   kind="podcast"
                   badge={`${p.episodes.length} eps`}
                   enrichmentKey={`podcast:${p.id}`}
-                        onClick={() => openDetail({ kind: 'podcast', id: p.id })}
+                  onClick={() => openDetail({ kind: 'podcast', id: p.id })}
                   onPlay={() => playQueue(buildPodcastQueue(p))}
                   isPlaying={currentPlayingPodcastId === p.id}
                 />
-              </div>
-            ))}
-          </SpotifyRail>
+              ))}
+            </div>
+          </div>
         </>
       )}
 
-      {/* Search results */}
-      {query && (
+      {/* ── Episodes browse mode ──────────────────────────────────────── */}
+      {browseMode === 'episodes' && (
         <div className="px-6 md:px-8">
-          <h2 className="text-lg font-bold mb-4">
-            {filtered.length} result{filtered.length === 1 ? '' : 's'} for "{query}"
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
-            {filtered.map((p) => (
-              <SpotifyCard
-                key={p.id}
-                title={p.title}
-                subtitle={p.host}
-                coverUrl={p.coverUrl}
-                kind="podcast"
-                enrichmentKey={`podcast:${p.id}`}
-                        onClick={() => openDetail({ kind: 'podcast', id: p.id })}
-                onPlay={() => playQueue(buildPodcastQueue(p))}
-                isPlaying={currentPlayingPodcastId === p.id}
-              />
-            ))}
+          {/* Latest Episodes — Spotify-style horizontal cards */}
+          <div className="flex items-end justify-between mb-3">
+            <h2 className="text-xl font-bold">Latest Episodes</h2>
+            <span className="text-xs text-muted-foreground">{latestEpisodes.length} episodes</span>
           </div>
+          <div className="space-y-1">
+            {latestEpisodes.map((ep) => {
+              const isCurrent = queue[currentIndex]?.id === ep.episodeId
+              return (
+                <button
+                  key={ep.episodeId}
+                  onClick={ep.onPlay}
+                  className={cn(
+                    'w-full flex items-center gap-3 p-2.5 rounded-lg transition group text-left',
+                    isCurrent
+                      ? 'bg-[var(--accent)]/15 border border-[var(--accent)]/30'
+                      : 'hover:bg-white/[0.06] border border-transparent',
+                  )}
+                >
+                  {/* Cover art */}
+                  <div className="w-14 h-14 rounded-lg overflow-hidden bg-muted shrink-0 relative">
+                    {ep.podcastCover ? (
+                      <img src={ep.podcastCover} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/20 to-emerald-700/20">
+                        <Mic className="w-5 h-5 text-[var(--accent)]" />
+                      </div>
+                    )}
+                    {/* Play overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition bg-black/40">
+                      <PlayCircle className="w-7 h-7 text-white" />
+                    </div>
+                  </div>
+                  {/* Title + show name */}
+                  <div className="min-w-0 flex-1">
+                    <div className={cn(
+                      'text-sm font-medium truncate',
+                      isCurrent && 'text-[var(--accent)]',
+                    )}>
+                      {ep.episodeTitle}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1.5">
+                      <span>{ep.podcastTitle}</span>
+                      <span>·</span>
+                      <span>Ep {ep.episodeNumber}</span>
+                    </div>
+                  </div>
+                  {/* Duration */}
+                  {ep.durationSec && (
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                      {Math.round(ep.durationSec / 60)} min
+                    </span>
+                  )}
+                  {/* Now playing indicator */}
+                  {isCurrent && (
+                    <div className="flex items-end gap-[2px] h-4 shrink-0">
+                      {[0, 1, 2].map((j) => (
+                        <span
+                          key={j}
+                          className="w-[2px] bg-[var(--accent)] rounded-full eq-bar"
+                          style={{ animationDelay: `${j * 0.15}s` }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── History browse mode ───────────────────────────────────────── */}
+      {browseMode === 'history' && (
+        <div className="px-6 md:px-8">
+          {continueListening.length === 0 ? (
+            <div className="text-center py-12 text-sm text-muted-foreground">
+              <Clock className="w-8 h-8 text-muted-foreground/50 mx-auto mb-3" />
+              No listening history yet. Play an episode to see it here.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-end justify-between mb-3">
+                <h2 className="text-xl font-bold">Recently Played</h2>
+                <span className="text-xs text-muted-foreground">{continueListening.length} episodes</span>
+              </div>
+              <div className="space-y-1">
+                {continueListening.map((item) => (
+                  <button
+                    key={item.episodeId}
+                    onClick={() => {
+                      const pod = podcasts.find((p) => p.id === item.podcastId)
+                      if (pod) {
+                        const q = buildPodcastQueue(pod, item.episodeId)
+                        playQueue(q, 0)
+                      }
+                    }}
+                    className="w-full flex items-center gap-3 p-2.5 rounded-lg hover:bg-white/[0.06] transition group text-left"
+                  >
+                    <div className="w-14 h-14 rounded-lg overflow-hidden bg-muted shrink-0">
+                      {item.cover ? (
+                        <img src={item.cover} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[var(--accent)]/20 to-emerald-700/20">
+                          <Mic className="w-5 h-5 text-[var(--accent)]" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate group-hover:text-[var(--accent)] transition-colors">
+                        {item.title}
+                      </div>
+                      <div className="text-xs text-muted-foreground truncate">{item.subtitle}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] text-[var(--accent)] font-bold">{item.playCount}× played</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {new Date(item.lastPlayed).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
